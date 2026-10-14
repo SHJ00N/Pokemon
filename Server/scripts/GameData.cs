@@ -22,7 +22,10 @@ internal sealed record PokemonInfo(
 /* 
 db에서 추출한 기본 데이터
 테이블 목록 : 포켓몬, 타입, 기술, 타입간 상관 관계, 포켓몬별 기술 목록
+모든 데이터는 5세대를 기준으로 되어 있음. 최종 진화체만 남겨두는 것을 검토해야 할 것으로 보임.
+
 */
+
 internal sealed class GameData
 {
     // 실행중 변경되지 않는 데이터이므로 FrozenDictionary 사용
