@@ -6,11 +6,12 @@ using System.Collections.Concurrent;
 
 class Program
 {
-    private static readonly ConcurrentDictionary<Socket, byte> Clients = new();
+    private static readonly ConcurrentDictionary<Guid, ClientSession> Clients = new();
+    private static readonly RoomManager Rooms = new();
 
     /*
     서버는 비동기 방식으로 클라이언트의 접속과 통신을 처리합니다. 
-    await 키워드가 있으면 해당 함수의 동작이 멈추고 호출한 함수의 실행 흐름으로 돌아옵니다. 
+    완료되지 않은 작업을 await하면 해당 함수가 잠시 멈추고 호출한 쪽으로 돌아옵니다.
     */
     // 내부에서 async task 타입 함수를 호출하므로 main 함수의 반환 타입을 변경
     static async Task Main(string[] args)
@@ -40,42 +41,25 @@ class Program
         {
             
             Socket client = await server.AcceptAsync();
-            Clients.TryAdd(client, 0);
+            var session = new ClientSession(client, Rooms);
+            Clients.TryAdd(session.Id, session);
             Console.WriteLine($"{client.RemoteEndPoint}: 접속 / 현재 {Clients.Count}명");
 
             // 클라이언트의 수신을 기다리는 동안 다음 접속을 받는다.
-            _ = HandleClientAsync(client);
+            _ = HandleClientAsync(session);
         }
     }
 
-    private static async Task HandleClientAsync(Socket client)
+    private static async Task HandleClientAsync(ClientSession session)
     {
-        string address = client.RemoteEndPoint?.ToString() ?? "unknown";    // 클라이언트 접속 확인용
-        byte[] buffer = new byte[1024];
-
         try
         {
-            while (true)
-            {
-                int received = await client.ReceiveAsync(buffer.AsMemory(), SocketFlags.None);
-
-                // 0바이트 수신은 상대가 정상적으로 연결을 종료했다는 의미다.
-                if (received == 0)
-                    break;
-
-                Console.WriteLine($"{address}: {received}바이트 수신");
-                // 게임 메시지 처리는 여기서 수행한다.
-            }
-        }
-        catch (SocketException ex)
-        {
-            Console.WriteLine($"{address}: 연결 오류 ({ex.SocketErrorCode})");
+            await session.RunAsync();
         }
         finally
         {
-            Clients.TryRemove(client, out _);
-            client.Dispose();
-            Console.WriteLine($"{address}: 접속 종료 / 현재 {Clients.Count}명");
+            Clients.TryRemove(session.Id, out _);
+            Console.WriteLine($"{session.Address}: 접속 종료 / 현재 {Clients.Count}명");
         }
     }
 }
