@@ -5,7 +5,12 @@ internal sealed record PokemonTypeInfo(int Id, string Name, string ColorRgb);
 
 internal sealed record PokemonMoveInfo(
     int Id, string Name, int TypeId, string Category,
-    int? Power, int? Accuracy, int Pp, int Priority);
+    int? Power, int? Accuracy, int Pp, int Priority, bool IsMultiHit);
+
+internal sealed record StatusConditionInfo(int Id, string Code, string Name);
+
+internal sealed record MoveStatusEffectInfo(
+    int MoveId, int StatusId, double Chance, string Target, string Timing, int EffectGroup);
 
 internal sealed record PokemonInfo(
     int Id,
@@ -21,7 +26,7 @@ internal sealed record PokemonInfo(
 
 /* 
 db에서 추출한 기본 데이터
-테이블 목록 : 포켓몬, 타입, 기술, 타입간 상관 관계, 포켓몬별 기술 목록
+테이블 목록 : 포켓몬, 타입, 기술, 타입간 상관 관계, 포켓몬별 기술 목록, 상태이상, 기술별 상태이상 효과
 모든 데이터는 5세대를 기준으로 되어 있음. 최종 진화체만 남겨두는 것을 검토해야 할 것으로 보임.
 
 */
@@ -29,25 +34,31 @@ db에서 추출한 기본 데이터
 internal sealed class GameData
 {
     // 실행중 변경되지 않는 데이터이므로 FrozenDictionary 사용
-    public FrozenDictionary<int, PokemonInfo> PokemonById { get; }
-    public FrozenDictionary<int, PokemonTypeInfo> TypesById { get; }
-    public FrozenDictionary<int, PokemonMoveInfo> MovesById { get; }
-    public FrozenDictionary<(int AttackTypeId, int DefendTypeId), double> EffectivenessByType { get; }
+    public FrozenDictionary<int, PokemonInfo> PokemonById { get; } // 포켓몬 테이블
+    public FrozenDictionary<int, PokemonTypeInfo> TypesById { get; } // 타입 테이블
+    public FrozenDictionary<int, PokemonMoveInfo> MovesById { get; } // 기술 테이블
+    public FrozenDictionary<int, StatusConditionInfo> StatusConditionsById { get; } // 상태이상 테이블
+    public FrozenDictionary<int, IReadOnlyList<MoveStatusEffectInfo>> MoveStatusEffectsByMoveId { get; } // 기술의 상태이상 적용 확률 테이블
+    public FrozenDictionary<(int AttackTypeId, int DefendTypeId), double> EffectivenessByType { get; } // 타입 상성 테이블
 
-    public FrozenDictionary<int, FrozenSet<int>> LearnableMovesByPokemonId { get; }
+    public FrozenDictionary<int, FrozenSet<int>> LearnableMovesByPokemonId { get; } // 배우는 기술 목록 테이블
 
     private GameData(
         FrozenDictionary<int, PokemonInfo> pokemonById,
         FrozenDictionary<int, PokemonTypeInfo> typesById,
         FrozenDictionary<int, PokemonMoveInfo> movesById,
         FrozenDictionary<(int AttackTypeId, int DefendTypeId), double> effectivenessByType,
-        FrozenDictionary<int, FrozenSet<int>> learnableMovesByPokemonId)
+        FrozenDictionary<int, FrozenSet<int>> learnableMovesByPokemonId,
+        FrozenDictionary<int, StatusConditionInfo> statusConditionsById,
+        FrozenDictionary<int, IReadOnlyList<MoveStatusEffectInfo>> moveStatusEffectsByMoveId)
     {
         PokemonById = pokemonById;
         TypesById = typesById;
         MovesById = movesById;
         EffectivenessByType = effectivenessByType;
         LearnableMovesByPokemonId = learnableMovesByPokemonId;
+        StatusConditionsById = statusConditionsById;
+        MoveStatusEffectsByMoveId = moveStatusEffectsByMoveId;
     }
 
     public static GameData Load(string databasePath)
@@ -88,7 +99,9 @@ internal sealed class GameData
             throw new InvalidDataException("타입 상성표에 누락되거나 유효하지 않은 조합이 있습니다.");
 
         var learnsets = LoadLearnsets(connection, pokemon, moves);
-        return new GameData(pokemon, types, moves, effectiveness, learnsets);
+        var statuses = LoadStatusConditions(connection);
+        var statusEffects = LoadMoveStatusEffects(connection, moves, statuses);
+        return new GameData(pokemon, types, moves, effectiveness, learnsets, statuses, statusEffects);
     }
 
     // 두 타입의 상성 관계에 따른 데미지 배율
@@ -175,7 +188,7 @@ internal sealed class GameData
     {
         using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT move_id, name, type_id, category, power, accuracy, pp, priority
+            SELECT move_id, name, type_id, category, power, accuracy, pp, priority, is_multi_hit
             FROM PokemonMove ORDER BY move_id
             """;
         using var reader = command.ExecuteReader();
@@ -185,7 +198,8 @@ internal sealed class GameData
             var move = new PokemonMoveInfo(
                 reader.GetInt32(0), reader.GetString(1), reader.GetInt32(2),
                 reader.GetString(3), reader.IsDBNull(4) ? null : reader.GetInt32(4),
-                reader.IsDBNull(5) ? null : reader.GetInt32(5), reader.GetInt32(6), reader.GetInt32(7));
+                reader.IsDBNull(5) ? null : reader.GetInt32(5), reader.GetInt32(6), reader.GetInt32(7),
+                reader.GetBoolean(8));
             if (!moves.TryAdd(move.Id, move))
                 throw new InvalidDataException($"중복된 기술 ID: {move.Id}");
         }
@@ -193,6 +207,55 @@ internal sealed class GameData
         if (moves.Count == 0)
             throw new InvalidDataException("기술 DB가 비어 있습니다.");
         return moves.ToFrozenDictionary();
+    }
+
+    private static FrozenDictionary<int, StatusConditionInfo> LoadStatusConditions(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT status_id, code, name FROM StatusCondition ORDER BY status_id";
+        using var reader = command.ExecuteReader();
+        var statuses = new Dictionary<int, StatusConditionInfo>();
+        while (reader.Read())
+        {
+            var status = new StatusConditionInfo(reader.GetInt32(0), reader.GetString(1), reader.GetString(2));
+            if (!statuses.TryAdd(status.Id, status))
+                throw new InvalidDataException($"중복된 상태이상 ID: {status.Id}");
+        }
+        return statuses.ToFrozenDictionary();
+    }
+
+    private static FrozenDictionary<int, IReadOnlyList<MoveStatusEffectInfo>> LoadMoveStatusEffects(
+        SqliteConnection connection, FrozenDictionary<int, PokemonMoveInfo> moves,
+        FrozenDictionary<int, StatusConditionInfo> statuses)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT move_id, status_id, chance, target, timing, effect_group
+            FROM MoveStatusEffect ORDER BY move_id, effect_group, status_id
+            """;
+        using var reader = command.ExecuteReader();
+        var effects = moves.Keys.ToDictionary(id => id, _ => new List<MoveStatusEffectInfo>());
+        while (reader.Read())
+        {
+            var effect = new MoveStatusEffectInfo(reader.GetInt32(0), reader.GetInt32(1), reader.GetDouble(2),
+                reader.GetString(3), reader.GetString(4), reader.GetInt32(5));
+            if (!effects.TryGetValue(effect.MoveId, out var list) || !statuses.ContainsKey(effect.StatusId))
+                throw new InvalidDataException($"상태이상 효과의 기술 또는 상태 ID가 유효하지 않습니다: {effect.MoveId}");
+            list.Add(effect);
+        }
+
+        foreach (var list in effects.Values)
+        {
+            foreach (var group in list.Where(e => e.EffectGroup > 0)
+                         .GroupBy(e => (e.EffectGroup, e.Target, e.Timing)))
+            {
+                if (group.Sum(e => e.Chance) > 100 + 1e-9)
+                    throw new InvalidDataException("상태이상 선택 그룹의 확률 합계가 100%를 초과합니다.");
+            }
+        }
+
+        return effects.ToFrozenDictionary(pair => pair.Key,
+            pair => (IReadOnlyList<MoveStatusEffectInfo>)pair.Value.AsReadOnly());
     }
 
     private static FrozenDictionary<(int AttackTypeId, int DefendTypeId), double>

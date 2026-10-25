@@ -144,12 +144,15 @@ SELECT_POKEMON {"PokemonId":1,"MoveIds":[33,45,73,22]}
 - 양쪽 선택을 모으는 작업과 방 공유 데이터 변경은 `RoomManager` 등의 서버 로직에 위임합니다.
 - 공격 순서, 명중 여부, 데미지, HP, 승패는 서버에서 판정하고 결과를 양쪽 클라이언트에 전달하도록 구현합니다.
 
-타입 상성에 따른 데미지 배율은 [Server/scripts/GameData.cs](Server/scripts/GameData.cs)의 94번째 줄부터 설명된 `GetMultiplier(int attackTypeId, int defendTypeId)`로 조회할 수 있습니다. 공격 기술의 타입 ID와 방어 포켓몬의 타입 ID를 순서대로 전달하면 두 타입의 상성 배율을 `double`로 반환합니다.
+타입 상성에 따른 데미지 배율은 [Server/scripts/GameData.cs](Server/scripts/GameData.cs)의 `GetMultiplier(int attackTypeId, int defendTypeId)`로 조회할 수 있습니다. 공격 기술의 타입 ID와 방어 포켓몬의 타입 ID를 순서대로 전달하면 두 타입의 상성 배율을 `double`로 반환합니다.
 GameData 객체의 경우 RoomManager 객체가 소유하고 있습니다.
+상태이상 정보나 기술의 상태이상 적용 확률도 DB에 저장되어 있습니다. DB 테이블의 구조를 확인하려면 VSCode의 SQLite Viewer 플러그를 설치하시면 됩니다.
 
 ```csharp
 double multiplier = data.GetMultiplier(move.TypeId, defender.Type1Id);
 ```
+
+기술별 상태이상 정보는 `data.MoveStatusEffectsByMoveId[move.Id]`, 상태 정의는 `data.StatusConditionsById[effect.StatusId]`로 조회합니다. 확률뿐 아니라 적용 대상·시점·추첨 그룹도 함께 확인해야 합니다. 데이터 범위와 필드 의미는 [DB 설명](Server/resources/db/README.md)에 정리되어 있습니다. 현재는 정의와 읽기 전용 적재까지 구현되어 있으며, 실제 상태 적용·해제와 턴 처리는 전투 로직에서 구현해야 합니다.
 
 예를 들어 기술 사용 기능은 다음 순서로 추가합니다.
 
@@ -164,5 +167,9 @@ double multiplier = data.GetMultiplier(move.TypeId, defender.Type1Id);
 ```
 
 **현재 `USE_MOVE`는 양쪽 `InGameState.cs`에 주석 예시만 있고 실제로 동작하지 않습니다. `RoomManager.SelectMove()`와 공격·데미지·턴·승패 처리는 아직 구현되지 않았습니다.** 현재 동작하는 인게임 명령은 `SELECT_POKEMON`이며, 이후 화면에는 두 포켓몬과 선택한 기술까지 표시됩니다.또한 현재는 PokemonSelection 타입으로 선택된 포켓몬 객체가 생성되며 실제 인게임 상태 정보를 유지하는 포켓몬 객체는 정의되어 있지 않습니다. DB에는 포켓몬의 기본 개체값 스테이터스만 있으므로 실제 포켓몬 객체는 스테이터스 계산 식을 사용하여 스텟이 계산되어 적용되어야 합니다(50레벨 6v 기준으로 하면 될 듯).
+
+클라이언트의 연결 주소에 IPv4 주소는 자신의 컴퓨터 IPv4 주소로 변경해야 합니다. IPEndPoint ipep = new IPEndPoint(IPAddress.Parse("192.168.16.1"), 5000); << 해당부분, cmd 명령어 : ipconfig
+
+
 
 

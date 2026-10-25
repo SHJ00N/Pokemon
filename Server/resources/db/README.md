@@ -12,11 +12,83 @@
 - 위력이나 명중률이 원본에 없으면 `NULL`입니다. 원본의 `0`은 별도 값으로 그대로 저장합니다.
 - 560번 이후 기술은 수록하지 않습니다.
 
+### 연속기 여부
+
+`PokemonMove.is_multi_hit`는 한 턴에 여러 번 타격하는 연속기 여부입니다. SQLite의 `INTEGER NOT NULL DEFAULT 0` 열이며 `0`(아님), `1`(연속기)만 허용합니다.
+
+- 기존 DB와 같은 PokéAPI 커밋 `bc92d3b6029ef1abe9e7ad424c400b338f3c11fe`의 [move_meta.csv](https://github.com/PokeAPI/pokeapi/blob/bc92d3b6029ef1abe9e7ad424c400b338f3c11fe/data/v2/csv/move_meta.csv)에서 `max_hits > 1`인 기술을 기준으로 분류했습니다.
+- 기술 1~559번 중 21개가 연속기입니다. 두번차기, 연속뺨치기, 트리플킥, 집단구타 등이 포함됩니다.
+- 연속기 여부만 나타내며 실제 타격 횟수, 횟수 확률, 타격별 명중·위력 규칙은 별도로 구현해야 합니다. 여러 턴 동안 지속되는 기술 여부와는 다릅니다.
+- 서버 시작 시 `GameData.Load()`에서 `PokemonMoveInfo.IsMultiHit`로 읽습니다. DB는 실행 중 수정하지 않으며, 변경된 데이터를 사용하려면 서버를 다시 빌드·시작해야 합니다.
+- 이번 변경은 기존 DB를 직접 수정한 것입니다. DB 수정·재구축용 파이썬 코드나 서버 실행 시 마이그레이션은 추가하지 않았습니다.
+
+```sql
+SELECT move_id, name, is_multi_hit
+FROM PokemonMove
+WHERE is_multi_hit = 1
+ORDER BY move_id;
+```
+
 - `pokemon_id`: 전국도감 번호. 폼별 내부 ID가 아닌 종의 `species_id`를 사용합니다.
 - `name`: 한국어 이름. `type1_id`, `type2_id`의 순서는 원본의 타입 슬롯 1, 2를 따릅니다.
 - 6개 능력치는 레벨별 실능력치가 아닌 종족값입니다.
 - 각 종은 PokéAPI의 기본 폼(`is_default=1`)을 사용합니다. 리전 폼, 메가진화, 기타 대체 폼은 별도 행으로 넣지 않습니다.
 - 650번 이후 포켓몬은 수록하지 않습니다. 페어리로 변경된 포켓몬 22종과 기술 3개의 타입은 원본의 과거 변경 기록을 사용해 5세대 값으로 복원했습니다. 종족값과 기술의 위력·명중률·PP는 원본 버전의 현재 값이므로 5세대 당시 값과 다를 수 있습니다.
+
+## 상태이상과 기술별 적용 효과
+
+`StatusCondition`은 상태이상 정의, `MoveStatusEffect`는 기술과 상태이상의 연결을 저장합니다. 기존 DB를 직접 수정했으며, 파이썬 DB 수정·재구축 코드나 실행 시 마이그레이션은 추가하지 않았습니다.
+
+### StatusCondition
+
+| 열 | 의미 |
+| --- | --- |
+| `status_id` | 상태이상 기본 키 |
+| `code` | 고유 식별자 (`paralysis`, `sleep`, `freeze`, `burn`, `poison`, `confusion`, `infatuation`, `bad-poison`) |
+| `name` | 한국어 이름 |
+
+마비·잠듦·얼음·화상·독·혼란·헤롱헤롱·맹독의 8종입니다. ID 1~7은 PokéAPI의 상태 ID를 따르고, 맹독은 일반 독과 구분하기 위해 프로젝트 전용 ID `1001`을 사용합니다.
+
+### MoveStatusEffect
+
+| 열 | 의미 |
+| --- | --- |
+| `move_id` | `PokemonMove.move_id` 외래 키 |
+| `status_id` | `StatusCondition.status_id` 외래 키 |
+| `chance` | 적용 확률(%), `REAL`, 0 초과 100 이하 |
+| `target` | `opponent`(상대) 또는 `self`(자신) |
+| `timing` | `on_hit`(기술 적중 후), `on_use`(사용 성공 시), `after_sequence`(연속 턴 기술 종료 후), `end_next_turn`(다음 턴 종료 시) |
+| `effect_group` | `0`은 개별 효과. 같은 기술·대상·시점의 같은 양수 그룹은 그중 최대 하나를 적용하는 추첨 그룹 |
+
+기본 키는 `(move_id, status_id, target, timing)`입니다. 상태이상 없는 기술은 연결 행이 없습니다. 현재 85개 기술에 87개 효과가 등록되어 있습니다.
+
+- 기존 도감과 같은 PokéAPI 커밋의 [move_meta.csv](https://github.com/PokeAPI/pokeapi/blob/bc92d3b6029ef1abe9e7ad424c400b338f3c11fe/data/v2/csv/move_meta.csv), `moves.csv`, `move_effect_prose.csv`를 사용했습니다. 메타데이터의 상태 ID 1~7을 가져오고 특수 적용 시점을 보완했습니다. 기술의 기본 수치처럼 이 확률도 해당 원본의 값이며, 모든 수치를 5세대 당시 값으로 복원한 것은 아닙니다.
+- 변화 기술의 원본 `ailment_chance = 0`은 적용 확률 0%가 아닙니다. 상태 부여 자체가 기술의 주 효과인 경우 100%로 저장했습니다. 별도의 명중 판정과 타입·특성 면역 등은 전투 로직에서 처리해야 합니다.
+- 10만볼트는 적중 후 마비 10%, 전기자석파는 적중 후 마비 100%입니다. 확률을 기술 명중률과 미리 곱하지 않았습니다.
+- 맹독(92)과 맹독엄니(305)는 일반 독 대신 맹독으로 연결했습니다.
+- 트라이어택(161)은 마비·얼음·화상 각 `20/3%`, `effect_group = 1`입니다. 합계 20% 확률로 셋 중 하나만 적용하며, 각 행을 독립 판정하거나 여러 상태를 동시에 적용하면 안 됩니다. 그룹에서 선택된 상태가 면역이라고 다른 상태를 다시 추첨하는 규칙도 아닙니다.
+- 잠자기(156)는 자신에게 잠듦 100% (`on_use`), 난동부리기(37)·꽃잎댄스(80)·역린(200)은 자신에게 혼란 100% (`after_sequence`), 하품(281)은 상대에게 잠듦 100% (`end_next_turn`)입니다.
+- 현재 범위는 위 8종입니다. 풀죽음·조임·씨뿌리기 같은 다른 효과, 사이코시프트의 기존 상태 이전, 내던지기·비밀의힘 같은 조건부 효과는 이 연결만으로 구현되지 않습니다. 지속 턴 수와 구체적인 상태 동작도 별도 전투 로직에서 처리합니다.
+
+서버 시작 시 `GameData.StatusConditionsById`와 `GameData.MoveStatusEffectsByMoveId`에 읽기 전용으로 적재합니다. 효과가 없는 기술도 후자에서 빈 목록으로 조회할 수 있습니다. 실제 전투에서 걸린 상태는 DB에 쓰지 않고 포켓몬 전투 객체에 보관합니다.
+
+```csharp
+foreach (var effect in data.MoveStatusEffectsByMoveId[85])
+{
+    var status = data.StatusConditionsById[effect.StatusId];
+    // status.Name: 마비, effect.Chance: 10
+    // target, timing, effect_group을 확인한 뒤 전투 로직에서 판정한다.
+}
+```
+
+```sql
+SELECT m.name AS move, s.name AS status, e.chance, e.target, e.timing, e.effect_group
+FROM MoveStatusEffect AS e
+JOIN PokemonMove AS m USING (move_id)
+JOIN StatusCondition AS s USING (status_id)
+WHERE e.move_id IN (85, 92, 156, 161, 281, 305)
+ORDER BY e.move_id, e.status_id;
+```
 
 ## 습득 가능 기술 (레벨업·교배·비전머신)
 
