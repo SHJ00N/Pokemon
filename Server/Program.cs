@@ -7,7 +7,6 @@ using System.Collections.Concurrent;
 class Program
 {
     private static readonly ConcurrentDictionary<Guid, ClientSession> Clients = new();
-    private static readonly RoomManager Rooms = new();
 
     /*
     서버는 비동기 방식으로 클라이언트의 접속과 통신을 처리합니다. 
@@ -21,6 +20,7 @@ class Program
         // db 조회 및 게임 데이터 목록 생성
         string databasePath = Path.Combine(AppContext.BaseDirectory, "resources\\db", "Pokemon.db");
         GameData data = GameData.Load(databasePath);
+        var rooms = new RoomManager(data);
         Console.WriteLine(
             $"Loaded {data.PokemonById.Count} Pokemon, {data.TypesById.Count} types, " +
             $"{data.EffectivenessByType.Count} type matchups, and {data.MovesById.Count} moves, " +
@@ -41,7 +41,7 @@ class Program
         {
             
             Socket client = await server.AcceptAsync();
-            var session = new ClientSession(client, Rooms);
+            var session = new ClientSession(client, rooms);
             Clients.TryAdd(session.Id, session);
             Console.WriteLine($"{client.RemoteEndPoint}: 접속 / 현재 {Clients.Count}명");
 

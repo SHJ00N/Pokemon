@@ -1,6 +1,7 @@
 ﻿using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Threading.Channels;
 
 namespace Client;
 
@@ -11,7 +12,7 @@ class Program
         Console.OutputEncoding = Encoding.UTF8;
         Console.InputEncoding = Encoding.UTF8;
 
-        string host = args.Length > 0 ? args[0] : "10.201.11.76";
+        string host = args.Length > 0 ? args[0] : "192.168.16.1";
         int port = 5000;
         if (args.Length > 1 &&
             (!int.TryParse(args[1], out port) || port is < 1 or > 65535))
@@ -21,7 +22,7 @@ class Program
         }
 
         // 1. 서버에 접속
-        IPEndPoint ipep = new IPEndPoint(IPAddress.Parse("10.201.11.76"), 5000);
+        IPEndPoint ipep = new IPEndPoint(IPAddress.Parse("192.168.16.1"), 5000);
         Socket client = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
         client.Connect(ipep);
 
@@ -38,56 +39,31 @@ class Program
                 NewLine = "\n"
             };
 
-            // 사용자 입력 대기중 서버 종료에 대응하기 위해 비동기 사용
-            // 사용자 입력이 대기상태에 걸리면 ReceiveMessagesAsync를 일시정지하고 try문 실행 -- 비동기 작업
-            using var disconnected = new CancellationTokenSource(); // 입력 중단을 위한 객체
-            Task receiving = ReceiveMessagesAsync(reader, disconnected);
+            var events = Channel.CreateUnbounded<ClientEvent>(new UnboundedChannelOptions
+            {
+                SingleReader = true,
+                SingleWriter = false
+            });
+            using var stopping = new CancellationTokenSource();
+            Task receiving = ReceiveMessagesAsync(reader, events.Writer, stopping.Token);
+            Task readingInput = ReadInputEventsAsync(events.Writer, stopping.Token);
             try
             {
-                while (!disconnected.IsCancellationRequested)
+                if (await ProcessEventsAsync(events.Reader, writer, stopping.Token))
                 {
-                    Console.WriteLine("\n1. 방 만들기\n2. 방 입장\n3. 종료");
-                    Console.Write("선택: ");
-                    string? input = await ReadInputAsync(disconnected.Token);
-
-                    if (input == null || input == "3")
-                    {
-                        await writer.WriteLineAsync("3");
-                        client.Shutdown(SocketShutdown.Send);
-                        await receiving.WaitAsync(TimeSpan.FromSeconds(3));
-                        break;
-                    }
-
-                    if (input == "1")
-                    {
-                        await writer.WriteLineAsync("1");
-                    }
-                    else if (input == "2")
-                    {
-                        Console.Write("방 번호 (1000 이상): ");
-                        string? roomInput = await ReadInputAsync(disconnected.Token);
-                        if (roomInput == null)
-                            break;
-
-                        if (int.TryParse(roomInput, out int roomId) && roomId >= 1000)
-                            await writer.WriteLineAsync(roomId.ToString());
-                        else
-                            Console.WriteLine("1000 이상의 방 번호를 입력하세요.");
-                    }
-                    else
-                    {
-                        Console.WriteLine("1, 2, 3 중에서 선택하세요.");
-                    }
+                    await writer.WriteLineAsync("3");
+                    client.Shutdown(SocketShutdown.Send);
+                    await receiving.WaitAsync(TimeSpan.FromSeconds(3));
+                    Console.WriteLine("\n서버와의 연결이 종료되었습니다.");
                 }
-            }
-            catch (OperationCanceledException)
-            {
-                // 서버가 연결을 닫으면 입력 대기도 종료한다.
             }
             finally
             {
+                stopping.Cancel();
                 client.Close();
                 await receiving;
+                await readingInput;
+                events.Writer.TryComplete();
             }
         }
         catch (Exception ex) when (ex is SocketException or IOException or TimeoutException)
@@ -96,41 +72,82 @@ class Program
         }
     }
 
-    private static async Task<string?> ReadInputAsync(CancellationToken cancellationToken)
+    private static async Task<bool> ProcessEventsAsync(
+        ChannelReader<ClientEvent> events, StreamWriter writer, CancellationToken cancellationToken)
     {
-        return (await Task.Run(() => Console.ReadLine()).WaitAsync(cancellationToken))?.Trim();
+        ClientState state = new LobbyState();
+        state.ShowMenu();
+
+        await foreach (ClientEvent clientEvent in events.ReadAllAsync(cancellationToken))
+        {
+            switch (clientEvent)
+            {
+                case UserInput input:
+                    if (input.Text == null ||
+                        !await state.HandleCommand(input.Text, writer, cancellationToken))
+                        return true;
+                    break;
+                case ServerMessage message:
+                    state = state.HandleServerMessage(message.Text);
+                    break;
+                case ConnectionClosed closed:
+                    if (closed.Error != null)
+                        Console.WriteLine($"\n{closed.Error}");
+                    Console.WriteLine("\n서버와의 연결이 종료되었습니다.");
+                    return false;
+            }
+
+            // 상태 변경과 모든 메뉴 출력은 이 루프에서만 수행한다.
+            state.ShowMenu();
+        }
+
+        return false;
     }
 
-    private static async Task ReceiveMessagesAsync(
-        StreamReader reader, CancellationTokenSource disconnected)
+    private static async Task ReadInputEventsAsync(
+        ChannelWriter<ClientEvent> events, CancellationToken cancellationToken)
     {
         try
         {
-            while (await reader.ReadLineAsync() is string message)
+            while (!cancellationToken.IsCancellationRequested)
             {
-                string display = message switch
-                {
-                    var text when text.StartsWith("CREATED ") =>
-                        $"방 생성 완료! 방 번호: {text[8..]} / 상대방 대기 중",
-                    var text when text.StartsWith("JOINED ") =>
-                        $"방 {text[7..]} 입장 완료!",
-                    "PLAYER_JOINED" => "상대방이 입장했습니다.",
-                    "PLAYER_LEFT" => "상대방이 퇴장했습니다. 새 상대방을 기다립니다.",
-                    "ROOM_CLOSED" => "방장이 나가서 방이 닫혔습니다. 다른 방에 참여할 수 있습니다.",
-                    var text when text.StartsWith("ERROR ") => text[6..],
-                    _ => message
-                };
-                Console.WriteLine($"\n[서버] {display}");
+                string? input = await Task.Run(() => Console.ReadLine()).WaitAsync(cancellationToken);
+                await events.WriteAsync(new UserInput(input?.Trim()), cancellationToken);
+                if (input == null)
+                    return;
             }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // 서버 연결 종료 시 입력 이벤트 수집도 중단한다.
+        }
+        catch (IOException ex)
+        {
+            events.TryWrite(new ConnectionClosed($"입력 오류: {ex.Message}"));
+        }
+    }
+
+    private static async Task ReceiveMessagesAsync(
+        StreamReader reader, ChannelWriter<ClientEvent> events, CancellationToken cancellationToken)
+    {
+        string? error = null;
+        try
+        {
+            while (await reader.ReadLineAsync(cancellationToken) is string message)
+                await events.WriteAsync(new ServerMessage(message), cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // 클라이언트 종료에 따른 수신 취소.
         }
         catch (Exception ex) when (ex is IOException or SocketException or ObjectDisposedException)
         {
-            Console.WriteLine($"\n수신 종료: {ex.Message}");
+            error = $"수신 종료: {ex.Message}";
         }
         finally
         {
-            Console.WriteLine("\n서버와의 연결이 종료되었습니다.");
-            disconnected.Cancel();
+            if (!cancellationToken.IsCancellationRequested)
+                events.TryWrite(new ConnectionClosed(error));
         }
     }
 }

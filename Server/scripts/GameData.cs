@@ -91,6 +91,7 @@ internal sealed class GameData
         return new GameData(pokemon, types, moves, effectiveness, learnsets);
     }
 
+    // 두 타입의 상성 관계에 따른 데미지 배율
     public double GetMultiplier(int attackTypeId, int defendTypeId) =>
         EffectivenessByType[(attackTypeId, defendTypeId)];
 

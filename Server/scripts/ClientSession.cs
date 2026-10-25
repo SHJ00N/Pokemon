@@ -12,6 +12,8 @@ class ClientSession
     public string Address { get; }
     // RoomManager의 잠금 안에서만 읽고 변경한다.
     public int? RoomId { get; set; }
+    public bool IsReady { get; set; }
+    public ClientState State { get; set; } = new LobbyState();
 
     public ClientSession(Socket socket, RoomManager rooms)
     {
@@ -76,27 +78,16 @@ class ClientSession
                 else
                 {
                     line.Append(character);
-                    if (line.Length > 32)
+                    if (line.Length > 256)
                         return; // 잘못된 입력이 무한히 쌓이지 않게 제한한다.
                 }
             }
         }
     }
-
+    
     private bool HandleCommand(string text)
     {
-        if (!int.TryParse(text, out int command))
-            QueueMessage("ERROR 숫자 명령을 입력하세요.");
-        else if (command == 1)
-            rooms.CreateRoom(this);
-        else if (command == 3)
-            return false;
-        else if (command >= 1000)
-            rooms.JoinRoom(this, command);
-        else
-            QueueMessage("ERROR 잘못된 명령입니다.");
-
-        return true;
+        return State.HandleCommand(this, rooms, text);
     }
 
     private async Task SendMessagesAsync()
