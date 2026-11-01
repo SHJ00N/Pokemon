@@ -11,6 +11,7 @@ sealed class BattlePokemon
     public int Defense { get; }
     public int SpAttack { get; }
     public int SpDefense { get; }
+    public int Speed { get; }
 
     public BattlePokemon(PokemonInfo info, PokemonMoveInfo[] moves)
     {
@@ -21,6 +22,7 @@ sealed class BattlePokemon
         Defense = CalculateStat(info.BaseDefense);
         SpAttack = CalculateStat(info.BaseSpAttack);
         SpDefense = CalculateStat(info.BaseSpDefense);
+        Speed = CalculateStat(info.BaseSpeed);
     }
 
     private static int CalculateStat(int baseStat) => (2 * baseStat + 31) * Level / 100 + 5;

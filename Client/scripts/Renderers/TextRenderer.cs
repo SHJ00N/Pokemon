@@ -7,6 +7,14 @@ static class TextRenderer
     public static void Write(string text) => Console.Write(text);
     public static void WriteLine(string text = "") => Console.WriteLine(text);
 
+    // 보이는 화면과 위로 스크롤되는 이전 출력까지 지운다.
+    // Console.Clear()만 쓰면 터미널의 스크롤 기록에 이전 화면이 남는다.
+    public static void Clear()
+    {
+        Console.Clear();
+        Console.Write("\x1b[3J");
+    }
+
     public static void At(int x, int y, string text)
     {
         Console.SetCursorPosition(x, y);
