@@ -12,8 +12,23 @@ sealed class InGameState : ClientState
     private bool submitted;
     private BattleView? battle;
 
+    private static readonly string[] RpsNames = ["", "가위", "바위", "보"];
+    private int? rpsChoice;          // 이번 가위바위보에서 보낸 선택. 비기면 다시 null
+    private bool? myTurn;            // 가위바위보로 순서가 정해지기 전과 전투 종료 후에는 null
+    private string? result;          // "WIN" 또는 "LOSE"
+    private readonly List<string> battleLog = new();
+
     public override void ShowMenu() => InGameRenderer.Draw(
-        catalog, selectedPokemon, selectedMoves, submitted, battle, Notification);
+        catalog, selectedPokemon, selectedMoves, submitted, battle, Notification, battleLog, GetPrompt(), result);
+
+    private string GetPrompt()
+    {
+        if (myTurn == true) return "공격할 기술의 번호를 선택하세요: ";
+        if (myTurn == false) return "상대방의 행동을 기다리고 있습니다.";
+        return rpsChoice == null
+            ? "가위바위보로 선공을 정합니다. 1. 가위 2. 바위 3. 보: "
+            : $"{RpsNames[rpsChoice.Value]}를 냈습니다. 상대방의 선택을 기다리고 있습니다.";
+    }
 
     public override ClientState HandleServerMessage(string message)
     {
@@ -29,6 +44,49 @@ sealed class InGameState : ClientState
             battle = JsonSerializer.Deserialize<BattleView>(message[13..])
                 ?? throw new InvalidDataException("전투 화면 정보를 해석할 수 없습니다.");
             Notification = "양쪽 플레이어의 포켓몬 선택이 완료되었습니다.";
+            return this;
+        }
+        if (message.StartsWith("RPS_RESULT "))
+        {
+            // RPS_RESULT <내 선택> <상대 선택> <WIN|LOSE|DRAW>
+            string[] parts = message.Split(' ');
+            if (parts.Length == 4 && int.TryParse(parts[1], out int mine) && int.TryParse(parts[2], out int theirs) &&
+                mine is >= 1 and <= 3 && theirs is >= 1 and <= 3)
+            {
+                string outcome = parts[3] switch
+                {
+                    "WIN" => "이겼습니다! 먼저 공격합니다.",
+                    "LOSE" => "졌습니다. 상대방이 먼저 공격합니다.",
+                    _ => "비겼습니다. 다시 선택하세요."
+                };
+                AddLog($"가위바위보: 나 {RpsNames[mine]} vs 상대 {RpsNames[theirs]} → {outcome}");
+                rpsChoice = null;
+                Notification = null;
+                return this;
+            }
+        }
+        if (message.StartsWith("TURN "))
+        {
+            myTurn = message == "TURN MY";
+            return this;
+        }
+        if (message.StartsWith("MOVE_RESULT ") && battle != null)
+        {
+            MoveResult move = JsonSerializer.Deserialize<MoveResult>(message[12..])
+                ?? throw new InvalidDataException("기술 결과를 해석할 수 없습니다.");
+            battle = battle with
+            {
+                Player = battle.Player with { CurrentHp = move.PlayerHp },
+                Opponent = battle.Opponent with { CurrentHp = move.OpponentHp }
+            };
+            AddLog(DescribeMove(move));
+            return this;
+        }
+        if (message.StartsWith("BATTLE_END "))
+        {
+            result = message[11..];
+            myTurn = null;
+            Notification = null;
             return this;
         }
         if (message == "SELECTION_ACCEPTED")
@@ -58,24 +116,29 @@ sealed class InGameState : ClientState
     {
         Notification = null;
 
-        /*
-        battle 상태에서 실제 전투 처리 예시 서버의 InGameState.cs 에서 서버의 수신 처리도 해주어야 함.
-        if (battle != null)
+        if (result != null)
+            Notification = "재도전·나가기는 아직 구현되지 않았습니다.";
+        else if (battle != null && myTurn == null)
         {
-            if (!int.TryParse(input, out int slot) || slot is < 1 or > 4)
+            if (rpsChoice != null)
+                Notification = "상대방의 선택을 기다리는 중입니다.";
+            else if (!int.TryParse(input, out int choice) || choice is < 1 or > 3)
+                Notification = "1. 가위 2. 바위 3. 보 중에서 선택하세요.";
+            else
             {
-                Notification = "기술 번호 1~4를 입력하세요.";
-                return true;
+                await writer.WriteLineAsync($"RPS {choice}");
+                rpsChoice = choice;
             }
-
-            await writer.WriteLineAsync($"USE_MOVE {slot}");
-            Notification = "기술을 선택했습니다. 상대방의 선택을 기다립니다.";
-            return true;
         }
-        */
-
-        if (battle != null)
-            Notification = "현재는 두 포켓몬 표시까지 구현되어 있습니다.";
+        else if (battle != null && myTurn == false)
+            Notification = "상대방의 차례입니다.";
+        else if (battle != null)
+        {
+            if (!int.TryParse(input, out int slot) || slot < 1 || slot > battle.Moves.Length)
+                Notification = $"기술 번호 1~{battle.Moves.Length}를 입력하세요.";
+            else
+                await writer.WriteLineAsync($"USE_MOVE {slot}");
+        }
         else if (catalog == null)
             Notification = "서버에서 포켓몬 목록을 받는 중입니다.";
         else if (submitted)
@@ -107,5 +170,24 @@ sealed class InGameState : ClientState
             }
         }
         return true;
+    }
+
+    // 화면에는 최근 기록 몇 줄만 표시한다.
+    private void AddLog(string line)
+    {
+        battleLog.Add(line);
+        if (battleLog.Count > 3)
+            battleLog.RemoveAt(0);
+    }
+
+    private static string DescribeMove(MoveResult move)
+    {
+        string text = $"{(move.ByPlayer ? "내" : "상대")} {move.AttackerName}의 {move.MoveName}!";
+        if (!move.Supported) return text + " (아직 구현되지 않은 기술이라 효과가 없었다)";
+        if (!move.Hit) return text + " 공격이 빗나갔다!";
+        if (move.Effectiveness == 0) return text + " 효과가 없는 것 같다...";
+        if (move.Effectiveness > 1) text += " 효과가 굉장했다!";
+        else if (move.Effectiveness < 1) text += " 효과가 별로인 듯하다...";
+        return text + $" ({move.Damage} 데미지)";
     }
 }

@@ -5,12 +5,18 @@ namespace Client;
 static class InGameRenderer
 {
     public static void Draw(PokemonCatalogResponse? catalog, PokemonCatalogEntry? selectedPokemon,
-        IReadOnlyList<int> selectedMoves, bool submitted, BattleView? battle, string? notification)
+        IReadOnlyList<int> selectedMoves, bool submitted, BattleView? battle, string? notification,
+        IReadOnlyList<string> battleLog, string prompt, string? result)
     {
         Console.Clear();
+        if (result != null)
+        {
+            DrawResult(result, battleLog, notification);
+            return;
+        }
         if (battle != null)
         {
-            DrawBattle(battle, notification);
+            DrawBattle(battle, notification, battleLog, prompt);
             return;
         }
 
@@ -66,19 +72,19 @@ static class InGameRenderer
         }
     }
 
-    private static void DrawBattle(BattleView battle, string? notification)
+    private static void DrawBattle(BattleView battle, string? notification, IReadOnlyList<string> battleLog, string prompt)
     {
         int width = Console.BufferWidth;
         int height = Console.BufferHeight;
-        if (width < 76 || height < 20)
+        if (width < 76 || height < 25)
         {
-            TextRenderer.WriteLine("두 포켓몬을 표시하려면 76열 × 20행 이상의 터미널이 필요합니다.");
+            TextRenderer.WriteLine("두 포켓몬을 표시하려면 76열 × 25행 이상의 터미널이 필요합니다.");
             return;
         }
 
         int rightX = width / 2 + 1;
         int columns = width / 2 - 4;
-        int maxRows = height - 12;
+        int maxRows = height - 17;
         string[] player = PokemonRenderer.Load(battle.Player.PokemonId, maxRows, columns, flip: true);
         string[] opponent = PokemonRenderer.Load(battle.Opponent.PokemonId, maxRows, columns, flip: false);
         TextRenderer.At(2, 0, "내 포켓몬");
@@ -96,8 +102,27 @@ static class InGameRenderer
             TypeColorRenderer.WriteMarker(move.Type.ColorRgb);
             TextRenderer.Write(" " + TextRenderer.FitToWidth(move.Name, columns - 6));
         }
+        for (int index = 0; index < battleLog.Count; index++)
+            TextRenderer.At(2, statusY + 9 + index, TextRenderer.FitToWidth(battleLog[index], width - 4));
         if (notification != null)
-            TextRenderer.At(2, statusY + 8, TextRenderer.FitToWidth(notification, width - 4));
+            TextRenderer.At(2, statusY + 12, TextRenderer.FitToWidth(notification, width - 4));
+        // 입력 커서가 안내 문구 바로 뒤에 오도록 마지막에 출력한다.
+        TextRenderer.At(2, statusY + 13, prompt);
+    }
+
+    private static void DrawResult(string result, IReadOnlyList<string> battleLog, string? notification)
+    {
+        TextRenderer.WriteLine();
+        TextRenderer.WriteLine("  ==========================");
+        TextRenderer.WriteLine(result == "WIN" ? "            WIN" : "            LOSE");
+        TextRenderer.WriteLine("  ==========================");
+        TextRenderer.WriteLine();
+        foreach (string line in battleLog)
+            TextRenderer.WriteLine("  " + line);
+        TextRenderer.WriteLine();
+        TextRenderer.WriteLine("  1. 재도전  2. 나가기");
+        if (notification != null)
+            TextRenderer.WriteLine("\n  " + notification);
     }
 
     private static void DrawStatus(PokemonView pokemon, int x, int y, int columns)

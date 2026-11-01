@@ -145,15 +145,154 @@ class RoomManager
 
             if (room.HostSelection is PokemonSelection host && room.GuestSelection is PokemonSelection guest)
             {
-                PokemonView hostView = GetPokemon(host.PokemonId);
-                PokemonView guestView = GetPokemon(guest.PokemonId);
+                BattlePokemon hostPokemon = room.HostPokemon = CreateBattlePokemon(host);
+                BattlePokemon guestPokemon = room.GuestPokemon = CreateBattlePokemon(guest);
+                PokemonView hostView = GetPokemon(hostPokemon);
+                PokemonView guestView = GetPokemon(guestPokemon);
+                // BATTLE_READY 이후 클라이언트는 가위바위보 선택 단계로 들어간다.
                 room.Host.QueueMessage("BATTLE_READY " + JsonSerializer.Serialize(
-                    new BattleView(hostView, guestView, host.MoveIds.Select(id => GetMove(data.MovesById[id])).ToArray())));
+                    new BattleView(hostView, guestView, hostPokemon.Moves.Select(GetMove).ToArray())));
                 room.Guest.QueueMessage("BATTLE_READY " + JsonSerializer.Serialize(
-                    new BattleView(guestView, hostView, guest.MoveIds.Select(id => GetMove(data.MovesById[id])).ToArray())));
+                    new BattleView(guestView, hostView, guestPokemon.Moves.Select(GetMove).ToArray())));
             }
         }
     }
+
+    // choice: 1 가위, 2 바위, 3 보. 비기면 양쪽 모두 다시 선택한다.
+    public void SubmitRps(ClientSession session, int choice)
+    {
+        lock (roomsLock)
+        {
+            if (!TryGetBattleRoom(session, out GameRoom room) || room.Turn != null || room.BattleOver)
+            {
+                session.QueueMessage("ERROR 지금은 가위바위보를 할 수 없습니다.");
+                return;
+            }
+
+            bool isHost = room.Host.Id == session.Id;
+            if ((isHost ? room.HostRps : room.GuestRps) != null)
+            {
+                session.QueueMessage("ERROR 이미 가위바위보를 선택했습니다.");
+                return;
+            }
+            if (isHost) room.HostRps = choice;
+            else room.GuestRps = choice;
+
+            if (room.HostRps is not int hostChoice || room.GuestRps is not int guestChoice)
+                return;
+
+            ClientSession guest = room.Guest!;
+            if (hostChoice == guestChoice)
+            {
+                room.HostRps = room.GuestRps = null;
+                room.Host.QueueMessage($"RPS_RESULT {hostChoice} {guestChoice} DRAW");
+                guest.QueueMessage($"RPS_RESULT {guestChoice} {hostChoice} DRAW");
+                return;
+            }
+
+            // 바위(2)는 가위(1)를, 보(3)는 바위(2)를, 가위(1)는 보(3)를 이긴다.
+            bool hostWins = (hostChoice - guestChoice + 3) % 3 == 1;
+            room.Host.QueueMessage($"RPS_RESULT {hostChoice} {guestChoice} {(hostWins ? "WIN" : "LOSE")}");
+            guest.QueueMessage($"RPS_RESULT {guestChoice} {hostChoice} {(hostWins ? "LOSE" : "WIN")}");
+            SetTurn(room, hostWins ? room.Host : guest);
+        }
+    }
+
+    // slot: 선택한 기술 4개 중 몇 번째인지 (1~4)
+    public void UseMove(ClientSession session, int slot)
+    {
+        lock (roomsLock)
+        {
+            if (!TryGetBattleRoom(session, out GameRoom room) || room.Turn == null || room.BattleOver)
+            {
+                session.QueueMessage("ERROR 지금은 기술을 사용할 수 없습니다.");
+                return;
+            }
+            if (room.Turn.Id != session.Id)
+            {
+                session.QueueMessage("ERROR 상대방의 차례입니다.");
+                return;
+            }
+
+            bool isHost = room.Host.Id == session.Id;
+            BattlePokemon attacker = isHost ? room.HostPokemon! : room.GuestPokemon!;
+            BattlePokemon defender = isHost ? room.GuestPokemon! : room.HostPokemon!;
+            ClientSession opponent = isHost ? room.Guest! : room.Host;
+            PokemonMoveInfo move = attacker.Moves[slot - 1];
+
+            var (supported, hit, damage, effectiveness) = ApplyMove(attacker, defender, move);
+            session.QueueMessage("MOVE_RESULT " + JsonSerializer.Serialize(new MoveResult(
+                true, attacker.Info.Name, move.Name, supported, hit, damage, effectiveness, attacker.Hp, defender.Hp)));
+            opponent.QueueMessage("MOVE_RESULT " + JsonSerializer.Serialize(new MoveResult(
+                false, attacker.Info.Name, move.Name, supported, hit, damage, effectiveness, defender.Hp, attacker.Hp)));
+
+            if (defender.Hp == 0)
+            {
+                room.BattleOver = true;
+                room.Turn = null;
+                session.QueueMessage("BATTLE_END WIN");
+                opponent.QueueMessage("BATTLE_END LOSE");
+                Console.WriteLine($"방 {room.Id} 전투 종료: {session.Address} 승리");
+                return;
+            }
+            SetTurn(room, opponent);
+        }
+    }
+
+    // 5세대 데미지 공식 (급소, 날씨, 특성, 아이템, 랭크 변화는 아직 반영하지 않음)
+    private (bool Supported, bool Hit, int Damage, double Effectiveness) ApplyMove(
+        BattlePokemon attacker, BattlePokemon defender, PokemonMoveInfo move)
+    {
+        // 변화 기술과 위력 값이 없는 기술은 효과가 아직 구현되지 않았다.
+        if (move.Category == "변화" || move.Power is not int power)
+            return (false, true, 0, 1);
+
+        // 명중률이 없는 기술은 반드시 맞는다.
+        if (move.Accuracy is int accuracy && Random.Shared.Next(100) >= accuracy)
+            return (true, false, 0, 1);
+
+        double effectiveness = data.GetMultiplier(move.TypeId, defender.Info.Type1Id);
+        if (defender.Info.Type2Id is int type2)
+            effectiveness *= data.GetMultiplier(move.TypeId, type2);
+        if (effectiveness == 0)
+            return (true, true, 0, 0);
+
+        bool physical = move.Category == "물리";
+        int attack = physical ? attacker.Attack : attacker.SpAttack;
+        int defense = physical ? defender.Defense : defender.SpDefense;
+
+        int damage = (2 * BattlePokemon.Level / 5 + 2) * power * attack / defense / 50 + 2;
+        damage = damage * Random.Shared.Next(85, 101) / 100;  // 난수 0.85~1.00
+        if (move.TypeId == attacker.Info.Type1Id || move.TypeId == attacker.Info.Type2Id)
+            damage = damage * 3 / 2;                          // 자속 보정 1.5배
+        damage = Math.Max(1, (int)(damage * effectiveness));  // 타입 상성
+
+        defender.Hp = Math.Max(0, defender.Hp - damage);
+        return (true, true, damage, effectiveness);
+    }
+
+    private static void SetTurn(GameRoom room, ClientSession player)
+    {
+        room.Turn = player;
+        ClientSession other = player.Id == room.Host.Id ? room.Guest! : room.Host;
+        player.QueueMessage("TURN MY");
+        other.QueueMessage("TURN OPPONENT");
+    }
+
+    // roomsLock 안에서 호출한다. 양쪽 포켓몬이 준비된 방만 찾는다.
+    private bool TryGetBattleRoom(ClientSession session, out GameRoom room)
+    {
+        room = null!;
+        if (session.State is not InGameState || session.RoomId is not int roomId ||
+            !rooms.TryGetValue(roomId, out GameRoom? found) || found.Guest == null ||
+            found.HostPokemon == null || found.GuestPokemon == null)
+            return false;
+        room = found;
+        return true;
+    }
+
+    private BattlePokemon CreateBattlePokemon(PokemonSelection selection) => new(
+        data.PokemonById[selection.PokemonId], selection.MoveIds.Select(id => data.MovesById[id]).ToArray());
 
     private TypeView GetType(int id)
     {
@@ -167,11 +306,8 @@ class RoomManager
     private MoveView GetMove(PokemonMoveInfo move) =>
         new(move.Id, move.Name, GetType(move.TypeId), move.Power, move.Accuracy);
 
-    private PokemonView GetPokemon(int id)
-    {
-        PokemonInfo pokemon = data.PokemonById[id];
-        return new PokemonView(id, pokemon.Name, pokemon.BaseHp, pokemon.BaseHp, GetTypes(pokemon));
-    }
+    private PokemonView GetPokemon(BattlePokemon pokemon) =>
+        new(pokemon.Info.Id, pokemon.Info.Name, pokemon.Hp, pokemon.MaxHp, GetTypes(pokemon.Info));
 
     public void LeaveRoom(ClientSession session, bool notify = false)
     {
@@ -210,7 +346,7 @@ class RoomManager
                 {
                     room.Host.State = new InRoomState();
                     room.Host.IsReady = false;
-                    room.HostSelection = room.GuestSelection = null;
+                    room.ResetBattle();
                     room.Host.QueueMessage($"RETURN_TO_ROOM {room.Id} {room.Host.Address}");
                 }
                 BroadcastPlayers(room);
