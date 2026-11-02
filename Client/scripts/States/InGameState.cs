@@ -8,7 +8,9 @@ sealed class InGameState : ClientState
     private const int TeamSize = 3;
 
     // 전투 중 입력 단계
-    private enum BattleMenu { Waiting, Main, Fight, Switch, ForcedSwitch }
+    private enum BattleMenu { Waiting, Main, Fight, Switch, ForcedSwitch, BatonPass }
+    private const int BatonPassMoveId = 226;   // 배턴터치: 쓰기 전에 내보낼 포켓몬을 고른다.
+    private int batonPassSlot;                 // 배턴터치를 고른 기술 슬롯
 
     protected override string Menu => "\n[게임 중]";
     private PokemonCatalogResponse? catalog;
@@ -31,8 +33,8 @@ sealed class InGameState : ClientState
     public override void ShowMenu() => InGameRenderer.Draw(
         catalog, pickedPokemon.Select(p => p.Name).ToList(), MoveTarget, selectedMoves, submitted,
         battle, Notification, battleLog, GetPrompt(),
-        menu is BattleMenu.Switch or BattleMenu.ForcedSwitch ? GetSwitchCandidates() : null,
-        menu is BattleMenu.Fight or BattleMenu.Switch, result);
+        menu is BattleMenu.Switch or BattleMenu.ForcedSwitch or BattleMenu.BatonPass ? GetSwitchCandidates() : null,
+        menu is BattleMenu.Fight or BattleMenu.Switch or BattleMenu.BatonPass, result);
 
     private string GetPrompt() => menu switch
     {
@@ -40,6 +42,7 @@ sealed class InGameState : ClientState
         BattleMenu.Fight => "공격할 기술의 번호를 선택하세요: ",
         BattleMenu.Switch => "교체할 포켓몬의 번호를 선택하세요: ",
         BattleMenu.ForcedSwitch => "포켓몬이 쓰러졌습니다. 내보낼 포켓몬의 번호를 선택하세요: ",
+        BattleMenu.BatonPass => "배턴터치로 내보낼 포켓몬의 번호를 선택하세요: ",
         _ => "상대방의 행동을 기다리고 있습니다."
     };
 
@@ -69,7 +72,7 @@ sealed class InGameState : ClientState
             AddLog(message[11..]);
             return this;
         }
-        if (message is "CHOOSE_ACTION" or "CHOOSE_SWITCH" or "WAIT_SWITCH")
+        if (message is "CHOOSE_ACTION" or "CHOOSE_SWITCH" or "WAIT_SWITCH" or "LOCKED")
         {
             menu = message switch
             {
@@ -77,6 +80,8 @@ sealed class InGameState : ClientState
                 "CHOOSE_SWITCH" => BattleMenu.ForcedSwitch,
                 _ => BattleMenu.Waiting
             };
+            if (message == "LOCKED")
+                Notification = "난동을 부리고 있어서 같은 기술을 계속 사용합니다.";
             return this;
         }
         if (message.StartsWith("BATTLE_END "))
@@ -181,6 +186,12 @@ sealed class InGameState : ClientState
                     menu = BattleMenu.Main;
                 else if (number < 1 || number > moveCount)
                     Notification = $"기술 번호 1~{moveCount}를 입력하세요. (0. 뒤로)";
+                else if (battle.Team[battle.Active].Moves[number - 1].MoveId == BatonPassMoveId &&
+                         GetSwitchCandidates().Count > 0)
+                {
+                    batonPassSlot = number;
+                    menu = BattleMenu.BatonPass;
+                }
                 else
                 {
                     await writer.WriteLineAsync($"USE_MOVE {number}");
@@ -190,15 +201,18 @@ sealed class InGameState : ClientState
 
             case BattleMenu.Switch:
             case BattleMenu.ForcedSwitch:
+            case BattleMenu.BatonPass:
                 List<int> candidates = GetSwitchCandidates();
-                if (input == "0" && menu == BattleMenu.Switch)
-                    menu = BattleMenu.Main;
+                if (input == "0" && menu != BattleMenu.ForcedSwitch)
+                    menu = menu == BattleMenu.BatonPass ? BattleMenu.Fight : BattleMenu.Main;
                 else if (number < 1 || number > candidates.Count)
                     Notification = "목록에 있는 포켓몬 번호를 입력하세요.";
                 else
                 {
                     // 서버에는 팀 번호(1~3)를 보낸다.
-                    await writer.WriteLineAsync($"SWITCH {candidates[number - 1] + 1}");
+                    int teamSlot = candidates[number - 1] + 1;
+                    await writer.WriteLineAsync(menu == BattleMenu.BatonPass
+                        ? $"USE_MOVE {batonPassSlot} {teamSlot}" : $"SWITCH {teamSlot}");
                     WaitForOpponent();
                 }
                 break;

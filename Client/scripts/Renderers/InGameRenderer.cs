@@ -45,8 +45,9 @@ static class InGameRenderer
             TextRenderer.WriteLine("선택한 기술: " + string.Join(" / ", selectedMoves.Select(id => movesById[id].Name)));
             // 팀에 같은 포켓몬이 없으므로 이름으로 몇 번째인지 찾는다.
             int order = teamNames.ToList().IndexOf(selectedPokemon.Name) + 1;
-            TextRenderer.WriteLine($"{order}번째 포켓몬 {selectedPokemon.Name}의 " +
-                $"{selectedMoves.Count + 1}번 기술 번호를 입력하세요 (서로 다른 기술 4개).");
+            TextRenderer.Write($"{order}번째 포켓몬 ");
+            TypeColorRenderer.WriteColored(selectedPokemon.Name, SelectedPokemonColor);
+            TextRenderer.WriteLine($"의 {selectedMoves.Count + 1}번 기술 번호를 입력하세요 (서로 다른 기술 4개).");
         }
         if (notification != null) TextRenderer.WriteLine("\n" + notification);
     }
@@ -67,9 +68,13 @@ static class InGameRenderer
         }
     }
 
+    // 기술 선택 화면에서 지금 기술을 고르는 포켓몬 이름 색
+    private const string SelectedPokemonColor = "#FFD43B";
+
     private static void DrawMoveCatalog(PokemonCatalogEntry pokemon, IEnumerable<MoveView> moves)
     {
-        TextRenderer.WriteLine($"{pokemon.Name}이(가) 레벨업으로 배울 수 있는 기술");
+        TypeColorRenderer.WriteColored(pokemon.Name, SelectedPokemonColor);
+        TextRenderer.WriteLine($"{TextRenderer.Josa(pokemon.Name, "이", "가")} 배울 수 있는 기술 목록");
         TextRenderer.WriteLine("번호 타입    기술이름 위력 명중률");
         foreach (MoveView move in moves)
         {
@@ -113,7 +118,9 @@ static class InGameRenderer
             {
                 PokemonView pokemon = battle.Team[switchList[index]].Pokemon;
                 TextRenderer.At(2, statusY + 4 + index,
-                    $"{index + 1}. {pokemon.Name} (HP {pokemon.CurrentHp}/{pokemon.MaxHp})");
+                    $"{index + 1}. {pokemon.Name} (HP {pokemon.CurrentHp}/{pokemon.MaxHp}) ");
+                if (pokemon.Status != null)
+                    StatusColorRenderer.WriteStatus(pokemon.Status);
             }
         }
         else
@@ -140,7 +147,7 @@ static class InGameRenderer
     {
         TextRenderer.WriteLine();
         TextRenderer.WriteLine("  ==========================");
-        TextRenderer.WriteLine(result == "WIN" ? "            WIN" : "            LOSE");
+        TextRenderer.WriteLine("            " + (result is "WIN" or "DRAW" ? result : "LOSE"));
         TextRenderer.WriteLine("  ==========================");
         TextRenderer.WriteLine();
         TextRenderer.WriteLine("  1. 재도전  2. 나가기");
@@ -156,6 +163,13 @@ static class InGameRenderer
         {
             TypeColorRenderer.WriteMarker(type.ColorRgb);
             TextRenderer.Write(" ");
+        }
+        if (pokemon.Status != null)
+            StatusColorRenderer.WriteStatus(pokemon.Status);
+        if (pokemon.StatChanges is { Length: > 0 } changes)
+        {
+            Console.SetCursorPosition(x, y + 2);
+            StatusColorRenderer.WriteStatChanges(changes, columns);
         }
     }
 }

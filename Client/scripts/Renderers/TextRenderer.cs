@@ -21,6 +21,17 @@ static class TextRenderer
         Write(text);
     }
 
+    // 마지막 글자의 받침 유무에 따라 조사를 고른다. 예: Josa("이상해씨", "이", "가") → "가"
+    public static string Josa(string word, string afterFinal, string afterVowel)
+    {
+        char last = word[^1];
+        bool hasFinal = last is >= '가' and <= '힣' && (last - '가') % 28 != 0;
+        return hasFinal ? afterFinal : afterVowel;
+    }
+
+    // 터미널에 표시되는 칸 수. 한글 등 전각 문자는 두 칸이다.
+    public static int DisplayWidth(string text) => text.EnumerateRunes().Sum(Width);
+
     // 한글 등 전각 문자는 두 칸으로 계산한다.
     public static string FitToWidth(string text, int width)
     {
