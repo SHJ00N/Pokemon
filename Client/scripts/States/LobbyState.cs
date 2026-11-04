@@ -2,6 +2,8 @@ namespace Client;
 
 sealed class LobbyState : ClientState
 {
+    public override string BgmPath => Path.Combine("resources", "sounds", "01 Title Screen.wav");
+
     private static readonly string logo = File.ReadAllText(
         Path.Combine(AppContext.BaseDirectory, "resources", "pokemon_scripts", "pokemon_logo.txt"));
     private bool waitingForRoomNumber;
