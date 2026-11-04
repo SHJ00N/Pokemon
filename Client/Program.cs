@@ -9,10 +9,7 @@ class Program
 {
     static async Task Main(string[] args)
     {
-        Console.OutputEncoding = Encoding.UTF8;
-        Console.InputEncoding = Encoding.UTF8;
-
-        string host = args.Length > 0 ? args[0] : "192.168.16.1";
+        string host = args.Length > 0 ? args[0] : "192.168.56.1";
         int port = 5000;
         if (args.Length > 1 &&
             (!int.TryParse(args[1], out port) || port is < 1 or > 65535))
@@ -22,12 +19,13 @@ class Program
         }
 
         // 1. 서버에 접속
-        IPEndPoint ipep = new IPEndPoint(IPAddress.Parse("192.168.16.1"), 5000);
+        IPEndPoint ipep = new IPEndPoint(IPAddress.Parse("192.168.56.1"), 5000);
         Socket client = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
         client.Connect(ipep);
 
         try
         {
+            using ISoundManager sound = SoundManager.Initialize();
             Console.WriteLine($"서버 접속 완료: {host}:{port}");
 
             // 메세지 송/수신용 스트림 버퍼 생성
@@ -47,6 +45,7 @@ class Program
             using var stopping = new CancellationTokenSource();
             Task receiving = ReceiveMessagesAsync(reader, events.Writer, stopping.Token);
             Task readingInput = ReadInputEventsAsync(events.Writer, stopping.Token);
+            Task updatingAudio = WriteAudioUpdatesAsync(events.Writer, stopping.Token);
             try
             {
                 if (await ProcessEventsAsync(events.Reader, writer, stopping.Token))
@@ -63,6 +62,7 @@ class Program
                 client.Close();
                 await receiving;
                 await readingInput;
+                await updatingAudio;
                 events.Writer.TryComplete();
             }
         }
@@ -75,20 +75,35 @@ class Program
     private static async Task<bool> ProcessEventsAsync(
         ChannelReader<ClientEvent> events, StreamWriter writer, CancellationToken cancellationToken)
     {
+        ISoundManager sound = SoundManager.Instance;
         ClientState state = new LobbyState();
+        if (state.BgmPath is string initialBgm)
+            sound.PlayBgm(initialBgm);
         state.ShowMenu();
 
         await foreach (ClientEvent clientEvent in events.ReadAllAsync(cancellationToken))
         {
             switch (clientEvent)
             {
+                case AudioUpdate:
+                    sound.Update();
+                    continue;
                 case UserInput input:
                     if (input.Text == null ||
                         !await state.HandleCommand(input.Text, writer, cancellationToken))
                         return true;
                     break;
                 case ServerMessage message:
-                    state = state.HandleServerMessage(message.Text);
+                    ClientState nextState = state.HandleServerMessage(message.Text);
+                    // 상태 변경 시 bgm 변경
+                    if (nextState.BgmPath != state.BgmPath)
+                    {
+                        if (nextState.BgmPath is string nextBgm)
+                            sound.PlayBgm(nextBgm);
+                        else
+                            sound.StopBgm();
+                    }
+                    state = nextState;
                     break;
                 case ConnectionClosed closed:
                     if (closed.Error != null)
@@ -102,6 +117,23 @@ class Program
         }
 
         return false;
+    }
+
+    // 오디오는 일정 시간마다 주기적으로 업데이트 된다.
+    private static async Task WriteAudioUpdatesAsync(
+        ChannelWriter<ClientEvent> events, CancellationToken cancellationToken)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(33));
+        var update = new AudioUpdate();
+        try
+        {
+            while (await timer.WaitForNextTickAsync(cancellationToken))
+                await events.WriteAsync(update, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // 종료 시 오디오 업데이트 이벤트 생성도 중단한다.
+        }
     }
 
     private static async Task ReadInputEventsAsync(
