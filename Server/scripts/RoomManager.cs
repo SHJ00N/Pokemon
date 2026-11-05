@@ -19,10 +19,17 @@ partial class RoomManager
     public RoomManager(GameData data)
     {
         this.data = data;
-        var pokemon = data.PokemonById.Values.OrderBy(p => p.Id)
-            .Select(p => new PokemonCatalogEntry(p.Id, p.Name, GetTypes(p),
+        // 팀에 넣을 수 있는 폼만 도감번호 순으로 보낸다. 같은 종에 고를 수 있는 폼이 여럿이면 폼 이름을 붙인다.
+        var selectable = data.PokemonById.Values.Where(p => p.IsSelectable)
+            .OrderBy(p => p.SpeciesId).ThenBy(p => p.Id).ToArray();
+        var formCount = selectable.CountBy(p => p.SpeciesId).ToDictionary();
+        var pokemon = selectable
+            .Select(p => new PokemonCatalogEntry(p.Id, p.SpeciesId, p.Name,
+                formCount[p.SpeciesId] > 1 || !p.IsDefault ? p.FormName : null, GetTypes(p),
                 data.LearnableMovesByPokemonId[p.Id].Order().ToArray())).ToArray();
-        var moves = data.MovesById.Values.OrderBy(m => m.Id).Select(GetMove).ToArray();
+        // 기술은 고를 수 있는 폼이 배우는 것만 보낸다 (Z기술·다이맥스기 등은 빠진다).
+        var learnable = pokemon.SelectMany(p => p.LearnableMoveIds).ToHashSet();
+        var moves = data.MovesById.Values.Where(m => learnable.Contains(m.Id)).OrderBy(m => m.Id).Select(GetMove).ToArray();
         // 게임마다 같은 목록을 보내므로 서버 시작 시 한 번만 압축해 둔다.
         catalogMessage = "POKEMON_CATALOG " + CatalogCodec.Encode(new PokemonCatalogResponse(pokemon, moves), out int jsonBytes);
         CatalogJsonBytes = jsonBytes;
@@ -196,8 +203,9 @@ partial class RoomManager
                 session.QueueMessage("ERROR 이미 선택을 완료했습니다.");
                 return;
             }
+            // 같은 종은 폼이 달라도 한 마리만 넣을 수 있다 (예: 라이츄와 알로라 라이츄).
             if (team is not { Length: TeamSize } || team.Any(p => p == null || !IsValidSelection(p)) ||
-                team.Select(p => p.PokemonId).Distinct().Count() != TeamSize)
+                team.Select(p => data.PokemonById[p.PokemonId].SpeciesId).Distinct().Count() != TeamSize)
             {
                 session.QueueMessage("ERROR 서로 다른 포켓몬 3마리와 각각 배울 수 있는 서로 다른 기술 4개를 선택하세요.");
                 return;
@@ -557,7 +565,7 @@ partial class RoomManager
     }
 
     private bool IsValidSelection(PokemonSelection selection) =>
-        data.PokemonById.ContainsKey(selection.PokemonId) &&
+        data.PokemonById.TryGetValue(selection.PokemonId, out PokemonInfo? info) && info.IsSelectable &&
         selection.MoveIds is { Length: 4 } ids && ids.Distinct().Count() == 4 &&
         ids.All(id => data.LearnableMovesByPokemonId[selection.PokemonId].Contains(id));
 
@@ -578,7 +586,7 @@ partial class RoomManager
         new(move.Id, move.Name, GetType(move.TypeId), move.Power, move.Accuracy);
 
     private PokemonView GetPokemon(BattlePokemon pokemon) =>
-        new(pokemon.Info.Id, pokemon.Info.Name, pokemon.Hp, pokemon.MaxHp, GetTypes(pokemon.Info),
+        new(pokemon.Info.Id, pokemon.Info.SpeciesId, pokemon.Info.Name, pokemon.Hp, pokemon.MaxHp, GetTypes(pokemon.Info),
             pokemon.Status == null ? null : StatusName(pokemon.Status), DescribeStages(pokemon));
 
     public void LeaveRoom(ClientSession session, bool notify = false)

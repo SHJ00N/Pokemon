@@ -1,0 +1,9 @@
+status_id,code,name
+1,paralysis,"마비"
+2,sleep,"잠듦"
+3,freeze,"얼음"
+4,burn,"화상"
+5,poison,"독"
+6,confusion,"혼란"
+7,infatuation,"헤롱헤롱"
+1001,bad-poison,"맹독"

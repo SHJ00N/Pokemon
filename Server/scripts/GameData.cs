@@ -12,9 +12,15 @@ internal sealed record StatusConditionInfo(int Id, string Code, string Name);
 internal sealed record MoveStatusEffectInfo(
     int MoveId, int StatusId, double Chance, string Target, string Timing, int EffectGroup);
 
+// Id: 폼 번호 (기본 폼 = 전국도감 번호, 다른 폼 = 10001 이후). SpeciesId: 전국도감 번호
+// IsSelectable: 팀에 넣을 수 있는 폼인지 (메가진화·거다이맥스 등 전투 중에만 되는 폼은 false)
 internal sealed record PokemonInfo(
     int Id,
+    int SpeciesId,
     string Name,
+    string? FormName,
+    bool IsDefault,
+    bool IsSelectable,
     int Type1Id,
     int? Type2Id,
     int BaseHp,
@@ -26,8 +32,9 @@ internal sealed record PokemonInfo(
 
 /* 
 db에서 추출한 기본 데이터
-테이블 목록 : 포켓몬, 타입, 기술, 타입간 상관 관계, 포켓몬별 기술 목록, 상태이상, 기술별 상태이상 효과
-모든 데이터는 5세대를 기준으로 되어 있음. 최종 진화체만 남겨두는 것을 검토해야 할 것으로 보임.
+테이블 목록 : 포켓몬(폼), 타입, 기술, 타입간 상관 관계, 포켓몬별 기술 목록, 상태이상, 기술별 상태이상 효과
+포켓몬·기술·타입·상성은 현재 세대(페어리 포함 18타입) 데이터다. 종·진화·특성·도구·폼 체인지 테이블도 DB에 있지만
+아직 전투에서 쓰지 않아 읽지 않는다. (Server/resources/db/README.md)
 
 */
 
@@ -112,7 +119,8 @@ internal sealed class GameData
     {
         using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT pokemon_id, name, type1_id, type2_id,
+            SELECT pokemon_id, species_id, name, form_name, is_default, is_selectable,
+                   type1_id, type2_id,
                    base_hp, base_attack, base_defense,
                    base_sp_attack, base_sp_defense, base_speed
             FROM Pokemon
@@ -125,17 +133,21 @@ internal sealed class GameData
         {
             var pokemon = new PokemonInfo(
                 reader.GetInt32(0),
-                reader.GetString(1),
-                reader.GetInt32(2),
-                reader.IsDBNull(3) ? null : reader.GetInt32(3),
-                reader.GetInt32(4),
-                reader.GetInt32(5),
+                reader.GetInt32(1),
+                reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3),
+                reader.GetBoolean(4),
+                reader.GetBoolean(5),
                 reader.GetInt32(6),
-                reader.GetInt32(7),
+                reader.IsDBNull(7) ? null : reader.GetInt32(7),
                 reader.GetInt32(8),
-                reader.GetInt32(9));
+                reader.GetInt32(9),
+                reader.GetInt32(10),
+                reader.GetInt32(11),
+                reader.GetInt32(12),
+                reader.GetInt32(13));
             if (!pokemonById.TryAdd(pokemon.Id, pokemon))
-                throw new InvalidDataException($"중복된 포켓몬 도감번호: {pokemon.Id}");
+                throw new InvalidDataException($"중복된 포켓몬 번호: {pokemon.Id}");
         }
 
         if (pokemonById.Count == 0)

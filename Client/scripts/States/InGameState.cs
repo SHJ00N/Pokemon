@@ -54,7 +54,7 @@ sealed class InGameState : ClientState
     {
         shownSeconds = RemainingSeconds;
         InGameRenderer.Draw(
-            catalog, pickedPokemon.Select(p => p.Name).ToList(), MoveTarget, selectedMoves, submitted,
+            catalog, pickedPokemon.Select(InGameRenderer.DisplayName).ToList(), MoveTarget, selectedMoves, submitted,
             battle, Notification, battleLog, GetPrompt(),
             menu is BattleMenu.Switch or BattleMenu.ForcedSwitch or BattleMenu.BatonPass ? GetSwitchCandidates() : null,
             menu is BattleMenu.Fight or BattleMenu.Switch or BattleMenu.BatonPass, result, shownSeconds);
@@ -210,9 +210,9 @@ sealed class InGameState : ClientState
         {
             PokemonCatalogEntry? pokemon = catalog.Pokemon.FirstOrDefault(p => p.PokemonId == id);
             if (pokemon == null)
-                Notification = "목록에 있는 포켓몬 도감번호를 입력하세요.";
-            else if (pickedPokemon.Any(p => p.PokemonId == id))
-                Notification = "이미 팀에 있는 포켓몬입니다. 다른 포켓몬을 선택하세요.";
+                Notification = "목록에 있는 포켓몬 번호를 입력하세요.";
+            else if (pickedPokemon.Any(p => p.SpeciesId == pokemon.SpeciesId))
+                Notification = "이미 팀에 있는 포켓몬입니다. 같은 포켓몬은 폼이 달라도 한 마리만 넣을 수 있습니다.";
             else if (pokemon.LearnableMoveIds.Length < 4)
                 Notification = "서로 다른 기술 4개를 배울 수 있는 포켓몬을 선택하세요.";
             else
