@@ -44,6 +44,7 @@ class Program
             Task receiving = ReceiveMessagesAsync(reader, events.Writer, stopping.Token);
             Task readingInput = ReadInputEventsAsync(events.Writer, stopping.Token);
             Task updatingAudio = WriteAudioUpdatesAsync(events.Writer, stopping.Token);
+            Task updatingTimer = WriteTimerTicksAsync(events.Writer, stopping.Token);
             try
             {
                 if (await ProcessEventsAsync(events.Reader, writer, stopping.Token))
@@ -61,6 +62,7 @@ class Program
                 await receiving;
                 await readingInput;
                 await updatingAudio;
+                await updatingTimer;
                 events.Writer.TryComplete();
             }
         }
@@ -85,6 +87,10 @@ class Program
             {
                 case AudioUpdate:
                     sound.Update();
+                    continue;
+                case TimerTick:
+                    // 화면 전체를 다시 그리지 않고 남은 시간 표시만 고친다. 입력 중인 글자는 그대로 둔다.
+                    state.UpdateTimer();
                     continue;
                 case UserInput input:
                     if (input.Text == null ||
@@ -131,6 +137,23 @@ class Program
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             // 종료 시 오디오 업데이트 이벤트 생성도 중단한다.
+        }
+    }
+
+    // 제한시간은 서버가 매초 보내지 않으므로 클라이언트가 스스로 센다. 초가 바뀔 때만 화면을 고친다.
+    private static async Task WriteTimerTicksAsync(
+        ChannelWriter<ClientEvent> events, CancellationToken cancellationToken)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(250));
+        var tick = new TimerTick();
+        try
+        {
+            while (await timer.WaitForNextTickAsync(cancellationToken))
+                await events.WriteAsync(tick, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // 종료 시 제한시간 이벤트 생성도 중단한다.
         }
     }
 

@@ -81,16 +81,16 @@ dotnet run --project Client -- 192.168.0.10 5050     # 다른 컴퓨터의 서�
 | `PLAYER_READY` | 상대방의 준비 완료 |
 | `LEFT` | 자신의 퇴장 완료. `LobbyState`로 전환 |
 | `ROOM_CLOSED` | 방 안이나 포켓몬 선택 중에 호스트가 나가서 방 종료. 참여자는 `LobbyState`로 전환 |
-| `GAME_STARTED` | 두 플레이어 모두 준비 완료. `InGameState`로 전환 |
+| `GAME_STARTED` | 두 플레이어 모두 준비 완료. `InGameState`로 전환. 포켓몬 선택 제한시간 60초 시작 |
 | `POKEMON_CATALOG {JSON}` | 포켓몬·타입·기술·배울 수 있는 기술 목록 |
 | `SELECTION_ACCEPTED` | 자신의 포켓몬·기술 선택 승인 |
 | `BATTLE_STATE {JSON}` | 전투 화면 정보(`BattleView`). 내 팀 3마리(HP·기술), 출전 번호, 상대 출전 포켓몬. 첫 수신 시 전투 화면으로 전환하고, 매 턴·교체 후 다시 전송 |
 | `BATTLE_LOG <문장>` | 받는 플레이어 시점의 전투 기록. 예: `내 파이리의 화염방사! 효과가 굉장했다! (180 데미지)` |
-| `CHOOSE_ACTION` | 이번 턴 행동(싸운다/교체) 선택 |
-| `CHOOSE_SWITCH` | 출전 포켓몬이 쓰러짐. 내보낼 포켓몬 선택 |
+| `CHOOSE_ACTION` | 이번 턴 행동(싸운다/교체) 선택. 받은 순간부터 60초 |
+| `CHOOSE_SWITCH` | 출전 포켓몬이 쓰러짐. 내보낼 포켓몬 선택. 받은 순간부터 60초 |
 | `WAIT_SWITCH` | 상대가 쓰러진 포켓몬 대신 내보낼 포켓몬을 고르는 중 |
 | `LOCKED` | 난동 기술(난동부리기·꽃잎댄스·역린)로 이번 턴 행동이 정해져 있음. 선택 없이 대기 |
-| `BATTLE_END <WIN\|LOSE\|DRAW> [SURRENDER\|LEFT]` | 전투 종료. 결과 화면에 재도전·나가기 메뉴 표시. 한쪽 팀 3마리가 모두 쓰러지면 이유 없이 보내고, 턴 끝 데미지로 양쪽이 함께 전멸하면 `DRAW`. 항복으로 끝나면 `SURRENDER`, 상대가 나가거나 연결이 끊겨서 끝나면 `LEFT`(남은 쪽 `WIN`)가 붙음 |
+| `BATTLE_END <WIN\|LOSE\|DRAW> [SURRENDER\|LEFT\|TIMEOUT]` | 전투 종료. 결과 화면에 재도전·나가기 메뉴 표시. 한쪽 팀 3마리가 모두 쓰러지면 이유 없이 보내고, 턴 끝 데미지로 양쪽이 함께 전멸하면 `DRAW`. 항복으로 끝나면 `SURRENDER`, 상대가 나가거나 연결이 끊겨서 끝나면 `LEFT`(남은 쪽 `WIN`), 제한시간을 넘겨서 끝나면 `TIMEOUT`(양쪽 모두 넘기면 `DRAW`)이 붙음. 포켓몬 선택 시간 초과로 끝나면 전투 화면 없이 바로 보냄 |
 | `REMATCH_REQUESTED` | 자신의 재도전 신청 완료. 상대의 신청을 기다림 |
 | `PLAYER_REMATCH` | 상대가 재도전을 신청함 |
 | `REMATCH_STARTED` | 양쪽 모두 재도전을 신청함. 포켓몬 선택 화면으로 돌아감. 포켓몬 목록은 다시 보내지 않으므로 클라이언트가 이전 목록을 사용 |
@@ -285,6 +285,22 @@ DB의 `StatusCondition`·`MoveStatusEffect`에 있는 8종을 구현했습니다
 - 전투가 끝나면 `BATTLE_END`를 보내고, 클라이언트는 WIN/LOSE/DRAW와 재도전·나가기 메뉴를 표시합니다.
 - 전투 화면은 76열 × 27행 이상의 터미널이 필요합니다.
 
+### 선택 제한시간
+
+[RoomManager.Timer.cs](Server/scripts/RoomManager.Timer.cs)에 있습니다.
+
+| 선택 | 제한시간 | 넘기면 |
+| --- | --- | --- |
+| 포켓몬·기술 선택 (`GAME_STARTED`, `REMATCH_STARTED`부터) | 60초 | 바로 패배. 양쪽 모두 넘기면 무승부 |
+| 턴마다 행동 선택 (`CHOOSE_ACTION`부터) | 60초 | 그 턴을 쉬고 상대의 행동과 턴 끝 처리만 진행 |
+| 기절 후 교체 (`CHOOSE_SWITCH`부터) | 60초 | 남은 포켓몬 중 팀 순서가 가장 앞인 포켓몬이 자동으로 나감 |
+
+- 행동 선택과 기절 후 교체 시간 초과는 한 전투에서 합쳐서 셉니다. **2번째로 넘기면 패배**입니다. 1번째는 양쪽 전투 기록에 경고가 남습니다.
+- **남은 시간은 서버가 보내지 않습니다.** 클라이언트가 안내(`POKEMON_CATALOG`, `REMATCH_STARTED`, `CHOOSE_ACTION`, `CHOOSE_SWITCH`, `WAIT_SWITCH`, `LOCKED`)를 받은 순간부터 직접 세어 입력 줄 맨 앞에 `[남은 시간 45초]`로 표시합니다. 상대가 고르는 중이면(`WAIT_SWITCH`, `LOCKED`, 내 선택 후 대기) 상대의 남은 시간입니다.
+- 서버는 마감 시각까지 답이 왔는지만 확인합니다. 방마다 타이머를 두지 않고, 한 작업이 250ms마다 `roomsLock` 안에서 모든 방의 마감 시각을 확인합니다. 시스템 시계가 바뀌어도 영향이 없도록 `Environment.TickCount64`로 잽니다.
+- 클라이언트가 안내를 받기 전부터 서버의 시간이 흐르므로, 전송 지연과 확인 주기를 고려해 서버는 1초 더 기다립니다. 클라이언트는 0초가 되면 입력을 막고 서버의 판정을 기다립니다.
+- 클라이언트는 매초 화면 전체를 다시 그리지 않습니다. 250ms마다 `TimerTick` 이벤트가 오면 초가 바뀌었을 때만 커서 위치를 저장(`ESC 7`)하고, 입력 줄 맨 앞의 시간만 고쳐 쓴 뒤 되돌립니다(`ESC 8`). 그래서 입력 중인 글자는 지워지지 않습니다.
+
 ### 항복·재도전·나가기
 
 [RoomManager.cs](Server/scripts/RoomManager.cs)의 `Surrender`, `RequestRematch`, `LeaveRoom`에 있습니다.
@@ -293,6 +309,7 @@ DB의 `StatusCondition`·`MoveStatusEffect`에 있는 8종을 구현했습니다
 - 전투가 시작된 뒤 상대가 나가거나(`LEAVE`) 연결이 끊기면 항복으로 처리해 남은 쪽에 `BATTLE_END WIN LEFT`를 보냅니다. 남은 플레이어가 방장이 되고, 다른 플레이어는 이 방에 들어올 수 없습니다. 상대가 없으므로 재도전할 수 없고, 나가기를 고르면 방이 닫힙니다.
 - 결과 화면에서 상대가 나가면 `PLAYER_LEFT`를 보내며, 이미 재도전을 신청했어도 취소됩니다.
 - 재도전은 양쪽 모두 `REMATCH`를 보내면 시작합니다. 서버는 방의 전투 정보를 초기화하고(`GameRoom.ResetBattle`) 포켓몬 선택부터 다시 받습니다.
+- 포켓몬 선택 시간 초과로 끝난 결과 화면에서도 재도전·나가기를 똑같이 할 수 있습니다.
 - 포켓몬 선택 중에 나가는 경우는 이전과 같습니다. 호스트가 나가면 방이 닫히고(`ROOM_CLOSED`), 참여자가 나가면 호스트가 방으로 돌아갑니다(`RETURN_TO_ROOM`).
 
 ## 남은 작업

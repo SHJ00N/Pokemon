@@ -6,17 +6,18 @@ sealed class BattleSide
     public int Active { get; set; }                 // 현재 출전 중인 팀 번호 (0부터)
     public BattlePokemon Current => Team[Active];
 
-    // 이번 턴에 고른 행동. 둘 중 하나만 값이 있다.
+    // 이번 턴에 고른 행동. 셋 중 하나만 값이 있다.
     public int? ChosenMove { get; set; }            // 기술 슬롯 (1~4)
     public int? ChosenSwitch { get; set; }          // 교체할 팀 번호 (0부터)
+    public bool SkipTurn { get; set; }              // 제한시간 안에 고르지 않아 이번 턴을 쉰다.
     public int? BatonTarget { get; set; }           // 배턴터치로 내보낼 팀 번호 (0부터)
-    public bool HasChosen => ChosenMove != null || ChosenSwitch != null;
+    public bool HasChosen => ChosenMove != null || ChosenSwitch != null || SkipTurn;
+
+    // 행동 선택 제한시간을 넘긴 횟수 (이 전투 전체). RoomManager.MaxTimeouts번이 되면 진다.
+    public int Timeouts { get; set; }
 
     // 출전 포켓몬이 쓰러져 다음 포켓몬을 골라야 하는 상태
     public bool MustSwitch { get; set; }
-
-    // 전투가 끝난 뒤 재도전을 신청했는지. 양쪽 모두 신청하면 포켓몬 선택부터 다시 시작한다.
-    public bool WantsRematch { get; set; }
 
     // 우리 편 전체에 걸리는 효과의 남은 턴. 0이면 없음. 교체해도 유지된다.
     public int ReflectTurns { get; set; }           // 리플렉터: 물리 데미지 절반

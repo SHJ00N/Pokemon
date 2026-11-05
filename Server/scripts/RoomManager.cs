@@ -169,6 +169,7 @@ partial class RoomManager
                 guest.QueueMessage("GAME_STARTED");
                 room.Host.QueueMessage(catalogMessage);
                 guest.QueueMessage(catalogMessage);
+                room.TeamDeadline = Deadline(TeamTimeLimitSeconds);
             }
         }
     }
@@ -179,7 +180,7 @@ partial class RoomManager
         lock (roomsLock)
         {
             if (session.State is not InGameState || session.RoomId is not int roomId ||
-                !rooms.TryGetValue(roomId, out GameRoom? room) || room.Guest == null)
+                !rooms.TryGetValue(roomId, out GameRoom? room) || room.Guest == null || room.BattleOver)
             {
                 session.QueueMessage("ERROR 포켓몬을 선택할 수 있는 게임이 없습니다.");
                 return;
@@ -204,6 +205,7 @@ partial class RoomManager
 
             if (room.HostTeam is { } hostTeam && room.GuestTeam is { } guestTeam)
             {
+                room.TeamDeadline = null;
                 room.HostSide = CreateSide(room.Host, hostTeam);
                 room.GuestSide = CreateSide(room.Guest, guestTeam);
                 SendBattleState(room);
@@ -318,7 +320,9 @@ partial class RoomManager
     {
         lock (roomsLock)
         {
-            if (!TryGetBattle(session, out GameRoom room, out BattleSide me, out BattleSide other) || !room.BattleOver)
+            // 포켓몬 선택 시간 초과로 끝났으면 전투 정보(BattleSide)가 없으므로 방 단위로 확인한다.
+            if (session.State is not InGameState || session.RoomId is not int roomId ||
+                !rooms.TryGetValue(roomId, out GameRoom? room) || !room.BattleOver)
             {
                 session.QueueMessage("ERROR 재도전은 전투가 끝난 뒤에 신청할 수 있습니다.");
                 return;
@@ -328,22 +332,25 @@ partial class RoomManager
                 session.QueueMessage("ERROR 상대방이 나가서 재도전할 수 없습니다.");
                 return;
             }
-            if (me.WantsRematch)
+            bool isHost = room.Host.Id == session.Id;
+            if (isHost ? room.HostRematch : room.GuestRematch)
             {
                 session.QueueMessage("ERROR 이미 재도전을 신청했습니다.");
                 return;
             }
 
-            me.WantsRematch = true;
-            if (!other.WantsRematch)
+            if (isHost) room.HostRematch = true;
+            else room.GuestRematch = true;
+            if (!room.HostRematch || !room.GuestRematch)
             {
                 session.QueueMessage("REMATCH_REQUESTED");
-                other.Player.QueueMessage("PLAYER_REMATCH");
+                (isHost ? room.Guest : room.Host).QueueMessage("PLAYER_REMATCH");
                 return;
             }
 
             // 포켓몬 목록은 클라이언트가 이미 가지고 있으므로 다시 보내지 않는다.
             room.ResetBattle();
+            room.TeamDeadline = Deadline(TeamTimeLimitSeconds);
             room.Host.QueueMessage("REMATCH_STARTED");
             room.Guest.QueueMessage("REMATCH_STARTED");
             Console.WriteLine($"방 {room.Id} 재도전 시작");
@@ -361,6 +368,7 @@ partial class RoomManager
                     side.ChosenMove = slot;
         }
         SendPrompts(room);
+        room.ActionDeadline = Deadline(ActionTimeLimitSeconds);   // 클라이언트도 안내를 받은 순간부터 센다.
         TryResolveTurn(room);   // 양쪽 모두 고정되어 있으면 바로 진행한다.
     }
 
@@ -397,6 +405,7 @@ partial class RoomManager
 
         host.ChosenMove = guest.ChosenMove = null;
         host.ChosenSwitch = guest.ChosenSwitch = null;
+        host.SkipTurn = guest.SkipTurn = false;
         host.BatonTarget = guest.BatonTarget = null;
         SendBattleState(room);
 
@@ -587,7 +596,7 @@ partial class RoomManager
                 return;
 
             ClientSession? opponent = room.Host.Id == session.Id ? room.Guest : room.Host;
-            if (wasInGame && room.HostSide != null && opponent != null)
+            if (wasInGame && (room.HostSide != null || room.BattleOver) && opponent != null)
                 LeaveBattle(room, opponent);
             else if (room.Host.Id == session.Id)
             {
@@ -621,7 +630,8 @@ partial class RoomManager
         }
     }
 
-    // roomsLock 안에서 호출한다. 전투가 시작된 뒤 한 명이 나가면(연결 종료 포함) 항복으로 처리한다.
+    // roomsLock 안에서 호출한다. 전투가 시작됐거나 결과가 난 뒤 한 명이 나가면(연결 종료 포함) 처리한다.
+    // 전투 중이었다면 항복으로 처리한다.
     // 남은 플레이어는 방장이 되어 결과 화면에 남고, 나가기를 고르면 방이 닫힌다.
     private static void LeaveBattle(GameRoom room, ClientSession remaining)
     {

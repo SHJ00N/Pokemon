@@ -15,6 +15,14 @@ class GameRoom
     public bool BattleOver { get; set; }
     public int TrickRoomTurns { get; set; }  // 트릭룸 남은 턴: 스피드가 느린 쪽이 먼저 행동
 
+    // 선택 마감 시각 (Environment.TickCount64 기준 ms). null이면 기다리는 선택이 없다. (RoomManager.Timer.cs)
+    public long? TeamDeadline { get; set; }     // 포켓몬·기술 선택 마감
+    public long? ActionDeadline { get; set; }   // 이번 턴 행동 선택(기절 후 교체 포함) 마감
+
+    // 결과 화면에서 재도전을 신청했는지. 양쪽 모두 신청하면 포켓몬 선택부터 다시 시작한다.
+    public bool HostRematch { get; set; }
+    public bool GuestRematch { get; set; }
+
     public GameRoom(int id, ClientSession host)
     {
         Id = id;
@@ -27,5 +35,7 @@ class GameRoom
         HostSide = GuestSide = null;
         BattleOver = false;
         TrickRoomTurns = 0;
+        TeamDeadline = ActionDeadline = null;
+        HostRematch = GuestRematch = false;
     }
 }

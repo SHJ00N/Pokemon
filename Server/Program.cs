@@ -21,6 +21,7 @@ class Program
         string databasePath = Path.Combine(AppContext.BaseDirectory, "resources", "db", "Pokemon.db");
         GameData data = GameData.Load(databasePath);
         var rooms = new RoomManager(data);
+        _ = rooms.RunTimersAsync();     // 선택 제한시간 확인
         Console.WriteLine(
             $"Loaded {data.PokemonById.Count} Pokemon, {data.TypesById.Count} types, " +
             $"{data.EffectivenessByType.Count} type matchups, and {data.MovesById.Count} moves, " +

@@ -4,13 +4,32 @@ namespace Client;
 
 static class InGameRenderer
 {
+    // 남은 시간은 입력 줄 맨 앞(이 열)에 그린다. 그리지 않은 화면이면 null
+    private static int? timerColumn;
+
+    // 남은 시간 표시. 매초 같은 폭으로 고쳐 쓸 수 있게 폭을 고정한다.
+    private static string FormatTimer(int seconds) =>
+        TextRenderer.FitToWidth(seconds > 0 ? $"[남은 시간 {seconds,2}초]" : "[시간 초과]", 16) + " ";
+
+    // 화면 전체를 다시 그리지 않고 입력 줄의 남은 시간만 고쳐 쓴다.
+    // 커서 위치를 저장(ESC 7)하고 줄 맨 앞으로 가서 쓴 뒤 되돌리므로(ESC 8), 입력 중인 글자는 그대로 남는다.
+    public static void UpdateTimer(int seconds)
+    {
+        if (timerColumn is not int column)
+            return;
+        string moveRight = column > 0 ? $"\x1b[{column}C" : "";
+        Console.Write($"\x1b7\r{moveRight}{FormatTimer(seconds)}\x1b8");
+    }
+
     // switchList: 교체 메뉴일 때 고를 수 있는 팀 번호(0부터). null이면 기술 목록을 표시한다.
+    // timerSeconds: 선택 제한시간의 남은 초. null이면 표시하지 않는다.
     public static void Draw(PokemonCatalogResponse? catalog, IReadOnlyList<string> teamNames,
         PokemonCatalogEntry? selectedPokemon, IReadOnlyList<int> selectedMoves, bool submitted,
         BattleView? battle, string? notification, IReadOnlyList<string> battleLog, string prompt,
-        IReadOnlyList<int>? switchList, bool showBack, string? result)
+        IReadOnlyList<int>? switchList, bool showBack, string? result, int? timerSeconds)
     {
         TextRenderer.Clear();
+        timerColumn = null;
         if (result != null)
         {
             DrawResult(result, notification);
@@ -18,7 +37,7 @@ static class InGameRenderer
         }
         if (battle != null)
         {
-            DrawBattle(battle, notification, battleLog, prompt, switchList, showBack);
+            DrawBattle(battle, notification, battleLog, prompt, switchList, showBack, timerSeconds);
             return;
         }
 
@@ -50,6 +69,12 @@ static class InGameRenderer
             TextRenderer.WriteLine($"의 {selectedMoves.Count + 1}번 기술 번호를 입력하세요 (서로 다른 기술 4개).");
         }
         if (notification != null) TextRenderer.WriteLine("\n" + notification);
+        // 마지막 줄이 입력 줄이다. 남은 시간 뒤에서 입력한다.
+        if (catalog != null && timerSeconds is int seconds)
+        {
+            TextRenderer.Write(FormatTimer(seconds) + (submitted ? "" : "> "));
+            timerColumn = 0;
+        }
     }
 
     private static void DrawPokemonCatalog(IEnumerable<PokemonCatalogEntry> pokemon)
@@ -86,7 +111,7 @@ static class InGameRenderer
     }
 
     private static void DrawBattle(BattleView battle, string? notification, IReadOnlyList<string> battleLog,
-        string prompt, IReadOnlyList<int>? switchList, bool showBack)
+        string prompt, IReadOnlyList<int>? switchList, bool showBack, int? timerSeconds)
     {
         int width = Console.BufferWidth;
         int height = Console.BufferHeight;
@@ -139,8 +164,10 @@ static class InGameRenderer
             TextRenderer.At(2, statusY + 9 + index, TextRenderer.FitToWidth(battleLog[index], width - 4));
         if (notification != null)
             TextRenderer.At(2, statusY + 14, TextRenderer.FitToWidth(notification, width - 4));
-        // 입력 커서가 안내 문구 바로 뒤에 오도록 마지막에 출력한다.
-        TextRenderer.At(2, statusY + 15, prompt);
+        // 입력 커서가 안내 문구 바로 뒤에 오도록 마지막에 출력한다. 남은 시간은 그 줄 맨 앞에 둔다.
+        TextRenderer.At(2, statusY + 15, (timerSeconds is int seconds ? FormatTimer(seconds) : "") + prompt);
+        if (timerSeconds != null)
+            timerColumn = 2;
     }
 
     private static void DrawResult(string result, string? notification)
