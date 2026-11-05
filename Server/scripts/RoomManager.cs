@@ -1,8 +1,11 @@
 using System.Text.Json;
 using Pokemon.Protocol;
 
-class RoomManager
+// 상태이상 처리는 RoomManager.Status.cs에 나누어 둔다.
+partial class RoomManager
 {
+    private const int TeamSize = 3;
+
     private readonly GameData data;
     private readonly string catalogMessage;
     private readonly object roomsLock = new();
@@ -114,7 +117,8 @@ class RoomManager
         }
     }
 
-    public void SelectPokemon(ClientSession session, PokemonSelection? selection)
+    // 서로 다른 포켓몬 3마리와 각각의 기술 4개. 첫 번째 포켓몬이 먼저 출전한다.
+    public void SelectTeam(ClientSession session, PokemonSelection[]? team)
     {
         lock (roomsLock)
         {
@@ -126,34 +130,316 @@ class RoomManager
             }
 
             bool isHost = room.Host.Id == session.Id;
-            if ((isHost ? room.HostSelection : room.GuestSelection) != null)
+            if ((isHost ? room.HostTeam : room.GuestTeam) != null)
             {
                 session.QueueMessage("ERROR 이미 선택을 완료했습니다.");
                 return;
             }
-            if (selection == null || !data.PokemonById.ContainsKey(selection.PokemonId) ||
-                selection.MoveIds is not { Length: 4 } ids || ids.Distinct().Count() != 4 ||
-                ids.Any(id => !data.LearnableMovesByPokemonId[selection.PokemonId].Contains(id)))
+            if (team is not { Length: TeamSize } || team.Any(p => p == null || !IsValidSelection(p)) ||
+                team.Select(p => p.PokemonId).Distinct().Count() != TeamSize)
             {
-                session.QueueMessage("ERROR 포켓몬과 배울 수 있는 서로 다른 기술 4개를 선택하세요.");
+                session.QueueMessage("ERROR 서로 다른 포켓몬 3마리와 각각 배울 수 있는 서로 다른 기술 4개를 선택하세요.");
                 return;
             }
 
-            if (isHost) room.HostSelection = selection;
-            else room.GuestSelection = selection;
+            if (isHost) room.HostTeam = team;
+            else room.GuestTeam = team;
             session.QueueMessage("SELECTION_ACCEPTED");
 
-            if (room.HostSelection is PokemonSelection host && room.GuestSelection is PokemonSelection guest)
+            if (room.HostTeam is { } hostTeam && room.GuestTeam is { } guestTeam)
             {
-                PokemonView hostView = GetPokemon(host.PokemonId);
-                PokemonView guestView = GetPokemon(guest.PokemonId);
-                room.Host.QueueMessage("BATTLE_READY " + JsonSerializer.Serialize(
-                    new BattleView(hostView, guestView, host.MoveIds.Select(id => GetMove(data.MovesById[id])).ToArray())));
-                room.Guest.QueueMessage("BATTLE_READY " + JsonSerializer.Serialize(
-                    new BattleView(guestView, hostView, guest.MoveIds.Select(id => GetMove(data.MovesById[id])).ToArray())));
+                room.HostSide = CreateSide(room.Host, hostTeam);
+                room.GuestSide = CreateSide(room.Guest, guestTeam);
+                SendBattleState(room);
+                StartTurn(room);
             }
         }
     }
+
+    // slot: 출전 중인 포켓몬의 기술 4개 중 몇 번째인지 (1~4)
+    // batonTeamSlot: 배턴터치일 때 내보낼 팀 번호 (1~3). 교체할 포켓몬이 없으면 생략한다.
+    public void UseMove(ClientSession session, int slot, int? batonTeamSlot = null)
+    {
+        lock (roomsLock)
+        {
+            if (!TryGetBattle(session, out GameRoom room, out BattleSide me, out BattleSide other) ||
+                room.BattleOver || me.MustSwitch || other.MustSwitch || me.HasChosen)
+            {
+                session.QueueMessage("ERROR 지금은 행동을 선택할 수 없습니다.");
+                return;
+            }
+
+            if (me.Current.Moves[slot - 1].Id == BatonPassMoveId)
+            {
+                bool hasBench = me.Team.Where((pokemon, index) => index != me.Active && pokemon.Hp > 0).Any();
+                if (batonTeamSlot is int teamSlot)
+                {
+                    int index = teamSlot - 1;
+                    if (index == me.Active || me.Team[index].Hp == 0)
+                    {
+                        session.QueueMessage("ERROR 배턴터치로 내보낼 수 없는 포켓몬입니다.");
+                        return;
+                    }
+                    me.BatonTarget = index;
+                }
+                else if (hasBench)
+                {
+                    session.QueueMessage("ERROR 배턴터치로 내보낼 포켓몬을 고르세요.");
+                    return;
+                }
+            }
+
+            me.ChosenMove = slot;
+            TryResolveTurn(room);
+        }
+    }
+
+    // teamSlot: 교체할 팀 번호 (1~3)
+    public void SwitchPokemon(ClientSession session, int teamSlot)
+    {
+        lock (roomsLock)
+        {
+            if (!TryGetBattle(session, out GameRoom room, out BattleSide me, out BattleSide other) || room.BattleOver)
+            {
+                session.QueueMessage("ERROR 지금은 교체할 수 없습니다.");
+                return;
+            }
+
+            int index = teamSlot - 1;
+            if (index == me.Active || me.Team[index].Hp == 0)
+            {
+                session.QueueMessage("ERROR 교체할 수 없는 포켓몬입니다.");
+                return;
+            }
+
+            // 쓰러진 포켓몬 대신 내보내는 교체는 턴을 쓰지 않는다. 상대도 추가로 공격하지 못한다.
+            if (me.MustSwitch)
+            {
+                ChangeActive(room, me, index);
+                me.MustSwitch = false;
+                Log(room, me, $"가라, {me.Current.Info.Name}!", $"상대가 {WithJosa(me.Current.Info.Name, "을", "를")} 내보냈다!");
+                SendBattleState(room);
+                StartTurn(room);
+                return;
+            }
+
+            if (other.MustSwitch || me.HasChosen)
+            {
+                session.QueueMessage("ERROR 지금은 교체할 수 없습니다.");
+                return;
+            }
+            if (me.Current.Ingrained)
+            {
+                session.QueueMessage("ERROR 뿌리를 박고 있어서 교체할 수 없습니다.");
+                return;
+            }
+
+            me.ChosenSwitch = index;
+            TryResolveTurn(room);
+        }
+    }
+
+    // 새 턴을 시작한다. 난동 기술로 고정된 포켓몬은 행동을 자동으로 정한다.
+    private void StartTurn(GameRoom room)
+    {
+        BattleSide host = room.HostSide!, guest = room.GuestSide!;
+        if (!host.MustSwitch && !guest.MustSwitch)
+        {
+            foreach (BattleSide side in new[] { host, guest })
+                if (side.Current.LockedSlot is int slot)
+                    side.ChosenMove = slot;
+        }
+        SendPrompts(room);
+        TryResolveTurn(room);   // 양쪽 모두 고정되어 있으면 바로 진행한다.
+    }
+
+    // 양쪽이 모두 행동을 고르면 한 턴을 처리한다. 교체 → 공격(우선도, 스피드 순) → 턴 끝 처리 순서다.
+    private void TryResolveTurn(GameRoom room)
+    {
+        BattleSide host = room.HostSide!, guest = room.GuestSide!;
+        if (!host.HasChosen || !guest.HasChosen)
+            return;
+
+        foreach (BattleSide side in new[] { host, guest })
+        {
+            if (side.ChosenSwitch is not int index)
+                continue;
+            string previous = side.Current.Info.Name;
+            ChangeActive(room, side, index);
+            string next = side.Current.Info.Name;
+            Log(room, side, $"돌아와, {previous}! 가라, {next}!",
+                $"상대가 {WithJosa(previous, "을", "를")} 거두고 {WithJosa(next, "을", "를")} 내보냈다!");
+        }
+
+        // 우선도가 높은 기술 → 스피드가 빠른 포켓몬(트릭룸이면 느린 포켓몬) → 같으면 무작위
+        List<BattleSide> attackers = new[] { host, guest }
+            .Where(side => side.ChosenMove != null)
+            .OrderByDescending(side => side.Current.Moves[side.ChosenMove!.Value - 1].Priority)
+            .ThenByDescending(side => room.TrickRoomTurns > 0 ? -GetSpeed(side) : GetSpeed(side))
+            .ThenBy(_ => Random.Shared.Next())
+            .ToList();
+
+        for (int index = 0; index < attackers.Count; index++)
+            ExecuteMove(room, attackers[index], GetOther(room, attackers[index]), movesLast: index == attackers.Count - 1);
+
+        EndOfTurn(room);
+
+        host.ChosenMove = guest.ChosenMove = null;
+        host.ChosenSwitch = guest.ChosenSwitch = null;
+        host.BatonTarget = guest.BatonTarget = null;
+        SendBattleState(room);
+
+        bool hostAlive = host.Team.Any(pokemon => pokemon.Hp > 0);
+        bool guestAlive = guest.Team.Any(pokemon => pokemon.Hp > 0);
+        if (!hostAlive || !guestAlive)
+        {
+            // 턴 끝 데미지 등으로 양쪽 마지막 포켓몬이 함께 쓰러지면 무승부다.
+            room.BattleOver = true;
+            host.Player.QueueMessage(hostAlive ? "BATTLE_END WIN" : guestAlive ? "BATTLE_END LOSE" : "BATTLE_END DRAW");
+            guest.Player.QueueMessage(guestAlive ? "BATTLE_END WIN" : hostAlive ? "BATTLE_END LOSE" : "BATTLE_END DRAW");
+            Console.WriteLine($"방 {room.Id} 전투 종료");
+            return;
+        }
+        StartTurn(room);
+    }
+
+    // 출전 포켓몬을 바꾼다. 나가는 포켓몬의 일시 상태와, 그 포켓몬 때문에 걸린 상대의 헤롱헤롱이 풀린다.
+    private static void ChangeActive(GameRoom room, BattleSide side, int index)
+    {
+        side.Current.OnSwitchOut();
+        GetOther(room, side).Current.Infatuated = false;
+        side.Active = index;
+        side.Current.OnSwitchIn();
+    }
+
+    // 5세대 데미지 공식 (날씨, 특성, 아이템은 아직 반영하지 않음). HP는 바꾸지 않는다.
+    private (bool Supported, bool Hit, int Damage, double Effectiveness, bool Critical) CalculateDamage(
+        BattleSide attackerSide, BattleSide defenderSide, PokemonMoveInfo move)
+    {
+        BattlePokemon attacker = attackerSide.Current, defender = defenderSide.Current;
+        // 변화 기술과 위력 값이 없는 기술은 효과가 아직 구현되지 않았다.
+        if (move.Category == "변화" || move.Power is not int power)
+            return (false, true, 0, 1, false);
+
+        if (!AccuracyCheck(attacker, defender, move))
+            return (true, false, 0, 1, false);
+
+        double effectiveness = TypeMultiplier(move, defender);
+        if (effectiveness == 0)
+            return (true, true, 0, 0, false);
+
+        // 충전: 전기 기술 위력 2배, 한 번 쓰면 끝난다.
+        if (attacker.ChargeTurns > 0 && HasTypeName(move.TypeId, "전기"))
+        {
+            power *= 2;
+            attacker.ChargeTurns = 0;
+        }
+
+        bool physical = move.Category == "물리";
+        bool critical = RollCritical(attacker, defenderSide);
+        int attackStage = attacker.GetStage(physical ? Stat.Attack : Stat.SpAttack);
+        int defenseStage = defender.GetStage(physical ? Stat.Defense : Stat.SpDefense);
+        // 급소에 맞으면 공격 쪽의 불리한 랭크와 방어 쪽의 유리한 랭크를 무시한다.
+        if (critical)
+        {
+            attackStage = Math.Max(0, attackStage);
+            defenseStage = Math.Min(0, defenseStage);
+        }
+        int attack = (int)((physical ? attacker.Attack : attacker.SpAttack) * StageMultiplier(attackStage));
+        int defense = Math.Max(1, (int)((physical ? defender.Defense : defender.SpDefense) * StageMultiplier(defenseStage)));
+
+        int damage = (2 * BattlePokemon.Level / 5 + 2) * power * attack / defense / 50 + 2;
+        if (physical && attacker.Status == Burn)
+            damage /= 2;                                      // 화상이면 물리 기술 데미지 절반
+        if (!critical && (physical ? defenderSide.ReflectTurns : defenderSide.LightScreenTurns) > 0)
+            damage /= 2;                                      // 리플렉터·빛의장막 (급소면 무시)
+        if (critical)
+            damage *= 2;                                      // 급소 2배
+        damage = damage * Random.Shared.Next(85, 101) / 100;  // 난수 0.85~1.00
+        if (move.TypeId == attacker.Info.Type1Id || move.TypeId == attacker.Info.Type2Id)
+            damage = damage * 3 / 2;                          // 자속 보정 1.5배
+        damage = Math.Max(1, (int)(damage * effectiveness));  // 타입 상성
+
+        return (true, true, damage, effectiveness, critical);
+    }
+
+    private static string DescribeMove(BattlePokemon attacker, PokemonMoveInfo move,
+        (bool Supported, bool Hit, int Damage, double Effectiveness, bool Critical) result)
+    {
+        string text = $"{attacker.Info.Name}의 {move.Name}!";
+        if (!result.Supported) return text + " (아직 구현되지 않은 기술이라 효과가 없었다)";
+        if (!result.Hit) return text + " 공격이 빗나갔다!";
+        if (result.Effectiveness == 0) return text + " 효과가 없는 것 같다...";
+        if (result.Critical) text += " 급소에 맞았다!";
+        if (result.Effectiveness > 1) text += " 효과가 굉장했다!";
+        else if (result.Effectiveness < 1) text += " 효과가 별로인 듯하다...";
+        return text + $" ({result.Damage} 데미지)";
+    }
+
+    // 마지막 글자의 받침 유무에 따라 조사를 붙인다. 예: 마기라스를, 이상해씨를, 파이리가
+    private static string WithJosa(string word, string afterFinal, string afterVowel)
+    {
+        char last = word[^1];
+        bool hasFinal = last is >= '가' and <= '힣' && (last - '가') % 28 != 0;
+        return word + (hasFinal ? afterFinal : afterVowel);
+    }
+
+    // 같은 사건을 행동한 플레이어와 상대에게 각자의 시점으로 보낸다.
+    private static void Log(GameRoom room, BattleSide actor, string mine, string theirs)
+    {
+        actor.Player.QueueMessage("BATTLE_LOG " + mine);
+        GetOther(room, actor).Player.QueueMessage("BATTLE_LOG " + theirs);
+    }
+
+    private void SendBattleState(GameRoom room)
+    {
+        foreach (BattleSide side in new[] { room.HostSide!, room.GuestSide! })
+        {
+            var team = side.Team.Select(p => new TeamMemberView(GetPokemon(p), p.Moves.Select(GetMove).ToArray()));
+            side.Player.QueueMessage("BATTLE_STATE " + JsonSerializer.Serialize(
+                new BattleView(team.ToArray(), side.Active, GetPokemon(GetOther(room, side).Current))));
+        }
+    }
+
+    // CHOOSE_ACTION: 기술/교체 선택, CHOOSE_SWITCH: 쓰러진 포켓몬 대신 내보낼 포켓몬 선택,
+    // WAIT_SWITCH: 상대가 다음 포켓몬을 고르는 중, LOCKED: 난동 기술로 행동이 정해져 있어 선택 없이 대기
+    private static void SendPrompts(GameRoom room)
+    {
+        foreach (BattleSide side in new[] { room.HostSide!, room.GuestSide! })
+        {
+            BattleSide other = GetOther(room, side);
+            side.Player.QueueMessage(side.MustSwitch ? "CHOOSE_SWITCH"
+                : other.MustSwitch ? "WAIT_SWITCH"
+                : side.HasChosen ? "LOCKED" : "CHOOSE_ACTION");
+        }
+    }
+
+    private static BattleSide GetOther(GameRoom room, BattleSide side) =>
+        side == room.HostSide ? room.GuestSide! : room.HostSide!;
+
+    // roomsLock 안에서 호출한다. 양쪽 팀이 준비된 방만 찾는다.
+    private bool TryGetBattle(ClientSession session, out GameRoom room, out BattleSide me, out BattleSide other)
+    {
+        room = null!;
+        me = other = null!;
+        if (session.State is not InGameState || session.RoomId is not int roomId ||
+            !rooms.TryGetValue(roomId, out GameRoom? found) ||
+            found.HostSide is not { } host || found.GuestSide is not { } guest)
+            return false;
+
+        room = found;
+        (me, other) = host.Player.Id == session.Id ? (host, guest) : (guest, host);
+        return true;
+    }
+
+    private bool IsValidSelection(PokemonSelection selection) =>
+        data.PokemonById.ContainsKey(selection.PokemonId) &&
+        selection.MoveIds is { Length: 4 } ids && ids.Distinct().Count() == 4 &&
+        ids.All(id => data.LearnableMovesByPokemonId[selection.PokemonId].Contains(id));
+
+    private BattleSide CreateSide(ClientSession player, PokemonSelection[] team) => new(player, team
+        .Select(p => new BattlePokemon(data.PokemonById[p.PokemonId], p.MoveIds.Select(id => data.MovesById[id]).ToArray()))
+        .ToArray());
 
     private TypeView GetType(int id)
     {
@@ -167,11 +453,9 @@ class RoomManager
     private MoveView GetMove(PokemonMoveInfo move) =>
         new(move.Id, move.Name, GetType(move.TypeId), move.Power, move.Accuracy);
 
-    private PokemonView GetPokemon(int id)
-    {
-        PokemonInfo pokemon = data.PokemonById[id];
-        return new PokemonView(id, pokemon.Name, pokemon.BaseHp, pokemon.BaseHp, GetTypes(pokemon));
-    }
+    private PokemonView GetPokemon(BattlePokemon pokemon) =>
+        new(pokemon.Info.Id, pokemon.Info.Name, pokemon.Hp, pokemon.MaxHp, GetTypes(pokemon.Info),
+            pokemon.Status == null ? null : StatusName(pokemon.Status), DescribeStages(pokemon));
 
     public void LeaveRoom(ClientSession session, bool notify = false)
     {
@@ -210,7 +494,7 @@ class RoomManager
                 {
                     room.Host.State = new InRoomState();
                     room.Host.IsReady = false;
-                    room.HostSelection = room.GuestSelection = null;
+                    room.ResetBattle();
                     room.Host.QueueMessage($"RETURN_TO_ROOM {room.Id} {room.Host.Address}");
                 }
                 BroadcastPlayers(room);
