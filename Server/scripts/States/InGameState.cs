@@ -5,31 +5,36 @@ sealed class InGameState : ClientState
 {
     public override bool HandleCommand(ClientSession session, RoomManager rooms, string command)
     {
-        /*
-        서버의 인게임 커맨드 처리 
-        전투 중 기술 선택
+        // 전투 중 기술 사용: USE_MOVE <기술 슬롯 1~4> [배턴터치로 내보낼 팀 번호 1~3]
         if (command.StartsWith("USE_MOVE "))
         {
-            if (!int.TryParse(command[9..], out int slot)
-                || slot is < 1 or > 4)
-            {
+            string[] parts = command[9..].Split(' ');
+            if (parts.Length > 2 || !int.TryParse(parts[0], out int slot) || slot is < 1 or > 4)
                 session.QueueMessage("ERROR 기술 번호는 1~4입니다.");
-                return true;
-            }
-
-            // 선택을 저장하고, 양쪽 선택이 모이면 전투를 계산한다.
-            rooms.SelectMove(session, slot); // RoomManager 클래스에 SelectMove 정의해야 함.
+            else if (parts.Length == 2 && (!int.TryParse(parts[1], out int teamSlot) || teamSlot is < 1 or > 3))
+                session.QueueMessage("ERROR 팀 번호는 1~3입니다.");
+            else
+                rooms.UseMove(session, slot, parts.Length == 2 ? int.Parse(parts[1]) : null);
             return true;
         }
-        */
 
-        if (command.StartsWith("SELECT_POKEMON "))
+        // 전투 중 교체. 숫자는 팀 번호(1~3)다.
+        if (command.StartsWith("SWITCH "))
+        {
+            if (!int.TryParse(command[7..], out int teamSlot) || teamSlot is < 1 or > 3)
+                session.QueueMessage("ERROR 팀 번호는 1~3입니다.");
+            else
+                rooms.SwitchPokemon(session, teamSlot);
+            return true;
+        }
+
+        if (command.StartsWith("SELECT_TEAM "))
         {
             try
             {
-                // 포켓몬 및 기술 선택
-                PokemonSelection? selection = JsonSerializer.Deserialize<PokemonSelection>(command[15..]);
-                rooms.SelectPokemon(session, selection);
+                // 포켓몬 3마리와 각각의 기술 4개 선택
+                PokemonSelection[]? team = JsonSerializer.Deserialize<PokemonSelection[]>(command[12..]);
+                rooms.SelectTeam(session, team);
             }
             catch (JsonException)
             {
