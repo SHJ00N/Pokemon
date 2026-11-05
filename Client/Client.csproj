@@ -9,6 +9,7 @@
 
   <ItemGroup>
     <Compile Include="..\Shared\GameMessages.cs" Link="scripts\GameMessages.cs" />
+    <Compile Include="..\Shared\CatalogCodec.cs" Link="scripts\CatalogCodec.cs" />
     <None Update="resources\pokemon_scripts\*.txt"
           CopyToOutputDirectory="PreserveNewest"
           CopyToPublishDirectory="PreserveNewest" />

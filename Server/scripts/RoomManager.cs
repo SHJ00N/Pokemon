@@ -8,7 +8,9 @@ partial class RoomManager
     private const int MaxNicknameLength = 8;
 
     private readonly GameData data;
-    private readonly string catalogMessage;
+    private readonly string catalogMessage;     // POKEMON_CATALOG <Brotli로 압축한 JSON의 Base64>
+    public int CatalogJsonBytes { get; }        // 압축 전 JSON 크기
+    public int CatalogMessageBytes => catalogMessage.Length + 1;   // 실제로 보내는 크기 (ASCII, 줄바꿈 포함)
     private readonly object roomsLock = new();
     private readonly Dictionary<int, GameRoom> rooms = new();
     private readonly HashSet<string> nicknames = new();     // 접속 중인 플레이어의 닉네임 (중복 금지)
@@ -21,7 +23,9 @@ partial class RoomManager
             .Select(p => new PokemonCatalogEntry(p.Id, p.Name, GetTypes(p),
                 data.LearnableMovesByPokemonId[p.Id].Order().ToArray())).ToArray();
         var moves = data.MovesById.Values.OrderBy(m => m.Id).Select(GetMove).ToArray();
-        catalogMessage = "POKEMON_CATALOG " + JsonSerializer.Serialize(new PokemonCatalogResponse(pokemon, moves));
+        // 게임마다 같은 목록을 보내므로 서버 시작 시 한 번만 압축해 둔다.
+        catalogMessage = "POKEMON_CATALOG " + CatalogCodec.Encode(new PokemonCatalogResponse(pokemon, moves), out int jsonBytes);
+        CatalogJsonBytes = jsonBytes;
     }
 
     // 접속 직후 닉네임을 정하고 로비로 보낸다. 닉네임은 띄어쓰기 없이 1~8글자이며 접속 중인 다른 플레이어와 겹치면 안 된다.

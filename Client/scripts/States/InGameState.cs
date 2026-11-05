@@ -88,8 +88,7 @@ sealed class InGameState : ClientState
     {
         if (message.StartsWith("POKEMON_CATALOG "))
         {
-            catalog = JsonSerializer.Deserialize<PokemonCatalogResponse>(message[16..])
-                ?? throw new InvalidDataException("포켓몬 목록을 해석할 수 없습니다.");
+            catalog = CatalogCodec.Decode(message[16..]);   // Base64 → Brotli 압축 풀기 → JSON
             Notification = null;
             StartTimer(TeamTimeLimitSeconds);
             return this;

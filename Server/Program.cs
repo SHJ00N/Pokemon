@@ -26,6 +26,7 @@ class Program
             $"Loaded {data.PokemonById.Count} Pokemon, {data.TypesById.Count} types, " +
             $"{data.EffectivenessByType.Count} type matchups, and {data.MovesById.Count} moves, " +
             $"{data.LearnableMovesByPokemonId.Values.Sum(ids => ids.Count)} learnset entries from {databasePath}");
+        Console.WriteLine($"포켓몬 목록 메시지: JSON {rooms.CatalogJsonBytes:N0}B → Brotli 압축·Base64 {rooms.CatalogMessageBytes:N0}B");
         
         // TCP 소켓 생성
         // macOS는 AirPlay 수신기가 5000번 포트를 사용하므로 5050을 기본값으로 한다.
