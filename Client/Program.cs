@@ -1,5 +1,4 @@
-﻿using System.Net;
-using System.Net.Sockets;
+﻿using System.Net.Sockets;
 using System.Text;
 using System.Threading.Channels;
 
@@ -9,8 +8,8 @@ class Program
 {
     static async Task Main(string[] args)
     {
-        string host = args.Length > 0 ? args[0] : "192.168.56.1";
-        int port = 5000;
+        string host = args.Length > 0 ? args[0] : "127.0.0.1";
+        int port = 5050;
         if (args.Length > 1 &&
             (!int.TryParse(args[1], out port) || port is < 1 or > 65535))
         {
@@ -18,13 +17,12 @@ class Program
             return;
         }
 
-        // 1. 서버에 접속
-        IPEndPoint ipep = new IPEndPoint(IPAddress.Parse("192.168.56.1"), 5000);
-        Socket client = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-        client.Connect(ipep);
+        using Socket client = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
 
         try
         {
+            // 1. 서버에 접속 (IP 주소 또는 호스트 이름)
+            client.Connect(host, port);
             using ISoundManager sound = SoundManager.Initialize();
             Console.WriteLine($"서버 접속 완료: {host}:{port}");
 

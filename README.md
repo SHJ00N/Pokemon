@@ -30,7 +30,14 @@ C# / .NET 10 기반의 TCP 콘솔 포켓몬 게임입니다. 서버가 방과 �
 - 서버가 받는 명령은 줄바꿈을 제외하고 최대 256바이트입니다. 초과하면 연결을 종료합니다. 서버에서 클라이언트로 보내는 목록 JSON에는 이 제한을 적용하지 않습니다.
 - 오류는 `ERROR 설명` 형식으로 보냅니다. 연결 종료는 스트림의 EOF로 감지합니다.
 
-서버는 기본 포트 `5000`을 사용하며 실행 인자로 포트를 변경할 수 있습니다. 클라이언트의 실제 접속 대상은 현재 [Client/Program.cs](Client/Program.cs)의 `IPEndPoint`에 지정된 `192.168.16.1:5000`입니다. `host`, `port` 인자 처리도 있지만 실제 연결에는 아직 반영되지 않습니다.
+서버는 기본 포트 `5050`을 사용하며 실행 인자로 포트를 변경할 수 있습니다. macOS에서는 AirPlay 수신기가 `5000`, `7000`번 포트를 사용하므로 이 포트는 피합니다. 클라이언트는 `host`, `port` 인자로 접속 대상을 지정하며, 생략하면 `127.0.0.1:5050`에 접속합니다. `host`에는 IPv4 주소나 호스트 이름을 쓸 수 있습니다.
+
+```bash
+dotnet run --project Server                          # 포트 5050
+dotnet run --project Server -- 6000                  # 포트 지정
+dotnet run --project Client                          # 127.0.0.1:5050
+dotnet run --project Client -- 192.168.0.10 5050     # 다른 컴퓨터의 서버
+```
 
 ## 상태별 명령
 
@@ -168,7 +175,7 @@ double multiplier = data.GetMultiplier(move.TypeId, defender.Type1Id);
 
 **현재 `USE_MOVE`는 양쪽 `InGameState.cs`에 주석 예시만 있고 실제로 동작하지 않습니다. `RoomManager.SelectMove()`와 공격·데미지·턴·승패 처리는 아직 구현되지 않았습니다.** 현재 동작하는 인게임 명령은 `SELECT_POKEMON`이며, 이후 화면에는 두 포켓몬과 선택한 기술까지 표시됩니다.또한 현재는 PokemonSelection 타입으로 선택된 포켓몬 객체가 생성되며 실제 인게임 상태 정보를 유지하는 포켓몬 객체는 정의되어 있지 않습니다. DB에는 포켓몬의 기본 개체값 스테이터스만 있으므로 실제 포켓몬 객체는 스테이터스 계산 식을 사용하여 스텟이 계산되어 적용되어야 합니다(50레벨 6v 기준으로 하면 될 듯).
 
-클라이언트의 연결 주소에 IPv4 주소는 자신의 컴퓨터 IPv4 주소로 변경해야 합니다. IPEndPoint ipep = new IPEndPoint(IPAddress.Parse("192.168.16.1"), 5000); << 해당부분, cmd 명령어 : ipconfig
+다른 컴퓨터의 서버에 접속할 때는 코드를 고치지 않고 서버 컴퓨터의 IPv4 주소를 클라이언트 실행 인자로 넘깁니다. 서버 주소는 Windows에서 `ipconfig`, macOS에서 `ipconfig getifaddr en0`으로 확인합니다.
 
 
 

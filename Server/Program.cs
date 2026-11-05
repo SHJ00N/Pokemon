@@ -18,7 +18,7 @@ class Program
         Console.OutputEncoding = Encoding.UTF8;
 
         // db 조회 및 게임 데이터 목록 생성
-        string databasePath = Path.Combine(AppContext.BaseDirectory, "resources\\db", "Pokemon.db");
+        string databasePath = Path.Combine(AppContext.BaseDirectory, "resources", "db", "Pokemon.db");
         GameData data = GameData.Load(databasePath);
         var rooms = new RoomManager(data);
         Console.WriteLine(
@@ -27,7 +27,8 @@ class Program
             $"{data.LearnableMovesByPokemonId.Values.Sum(ids => ids.Count)} learnset entries from {databasePath}");
         
         // TCP 소켓 생성
-        int port = args.Length == 0 ? 5000 : int.Parse(args[0]);
+        // macOS는 AirPlay 수신기가 5000번 포트를 사용하므로 5050을 기본값으로 한다.
+        int port = args.Length == 0 ? 5050 : int.Parse(args[0]);
         IPEndPoint localEndPoint = new IPEndPoint(IPAddress.Any, port);
 
         using Socket server = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
