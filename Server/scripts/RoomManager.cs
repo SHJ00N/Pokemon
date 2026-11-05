@@ -5,11 +5,13 @@ using Pokemon.Protocol;
 partial class RoomManager
 {
     private const int TeamSize = 3;
+    private const int MaxNicknameLength = 8;
 
     private readonly GameData data;
     private readonly string catalogMessage;
     private readonly object roomsLock = new();
     private readonly Dictionary<int, GameRoom> rooms = new();
+    private readonly HashSet<string> nicknames = new();     // 접속 중인 플레이어의 닉네임 (중복 금지)
     private int nextRoomId = 1000;
 
     public RoomManager(GameData data)
@@ -20,6 +22,60 @@ partial class RoomManager
                 data.LearnableMovesByPokemonId[p.Id].Order().ToArray())).ToArray();
         var moves = data.MovesById.Values.OrderBy(m => m.Id).Select(GetMove).ToArray();
         catalogMessage = "POKEMON_CATALOG " + JsonSerializer.Serialize(new PokemonCatalogResponse(pokemon, moves));
+    }
+
+    // 접속 직후 닉네임을 정하고 로비로 보낸다. 닉네임은 띄어쓰기 없이 1~8글자이며 접속 중인 다른 플레이어와 겹치면 안 된다.
+    // 메시지를 띄어쓰기로 나누므로 닉네임에 띄어쓰기를 허용하지 않는다.
+    public void SetNickname(ClientSession session, string nickname)
+    {
+        lock (roomsLock)
+        {
+            if (session.State is not NicknameState)
+            {
+                session.QueueMessage("ERROR 이미 닉네임을 정했습니다.");
+                return;
+            }
+            if (nickname.Length is 0 or > MaxNicknameLength ||
+                nickname.Any(c => char.IsWhiteSpace(c) || char.IsControl(c)))
+            {
+                session.QueueMessage($"ERROR 닉네임은 띄어쓰기 없이 1~{MaxNicknameLength}글자로 입력하세요.");
+                return;
+            }
+            if (!nicknames.Add(nickname))
+            {
+                session.QueueMessage("ERROR 이미 사용 중인 닉네임입니다.");
+                return;
+            }
+
+            session.Nickname = nickname;
+            session.State = new LobbyState();
+            session.QueueMessage($"NAME_ACCEPTED {nickname}");
+            Console.WriteLine($"{session.Address}: 닉네임 {nickname}");
+        }
+    }
+
+    // 연결이 끊기면 방에서 내보내고 닉네임을 다른 플레이어가 쓸 수 있게 돌려준다.
+    public void Disconnect(ClientSession session)
+    {
+        lock (roomsLock)
+        {
+            LeaveRoom(session);
+            if (session.Nickname.Length > 0)
+                nicknames.Remove(session.Nickname);
+        }
+    }
+
+    // 로비의 방 목록. 게임 중이거나 가득 찬 방도 상태와 함께 보낸다.
+    public void SendRoomList(ClientSession session)
+    {
+        lock (roomsLock)
+        {
+            RoomSummary[] list = rooms.Values.OrderBy(room => room.Id)
+                .Select(room => new RoomSummary(room.Id, room.Host.Nickname, room.Guest == null ? 1 : 2,
+                    room.Host.State is not InRoomState))
+                .ToArray();
+            session.QueueMessage("ROOM_LIST " + JsonSerializer.Serialize(list));
+        }
     }
 
     public void CreateRoom(ClientSession session)
@@ -37,9 +93,9 @@ partial class RoomManager
             rooms.Add(roomId, room);
             session.RoomId = roomId;
             session.State = new InRoomState();
-            session.QueueMessage($"CREATED {roomId} {session.Address}");
+            session.QueueMessage($"CREATED {roomId} {session.Nickname}");
             BroadcastPlayers(room);
-            Console.WriteLine($"방 {roomId} 생성: {session.Address}");
+            Console.WriteLine($"방 {roomId} 생성: {session.Nickname} ({session.Address})");
         }
     }
 
@@ -71,10 +127,10 @@ partial class RoomManager
             room.Guest = session;
             session.RoomId = roomId;
             session.State = new InRoomState();
-            session.QueueMessage($"JOINED {roomId} {room.Host.Address}");
+            session.QueueMessage($"JOINED {roomId} {room.Host.Nickname}");
             room.Host.QueueMessage("PLAYER_JOINED");
             BroadcastPlayers(room);
-            Console.WriteLine($"방 {roomId} 입장: {session.Address}");
+            Console.WriteLine($"방 {roomId} 입장: {session.Nickname} ({session.Address})");
         }
     }
 
@@ -253,7 +309,7 @@ partial class RoomManager
             room.BattleOver = true;
             me.Player.QueueMessage("BATTLE_END LOSE SURRENDER");
             other.Player.QueueMessage("BATTLE_END WIN SURRENDER");
-            Console.WriteLine($"방 {room.Id} 전투 종료 (항복: {session.Address})");
+            Console.WriteLine($"방 {room.Id} 전투 종료 (항복: {session.Nickname})");
         }
     }
 
@@ -554,7 +610,7 @@ partial class RoomManager
                     room.Host.State = new InRoomState();
                     room.Host.IsReady = false;
                     room.ResetBattle();
-                    room.Host.QueueMessage($"RETURN_TO_ROOM {room.Id} {room.Host.Address}");
+                    room.Host.QueueMessage($"RETURN_TO_ROOM {room.Id} {room.Host.Nickname}");
                 }
                 BroadcastPlayers(room);
                 Console.WriteLine($"방 {roomId} 참여자 퇴장");
@@ -579,15 +635,15 @@ partial class RoomManager
         }
         else
             remaining.QueueMessage("PLAYER_LEFT");   // 결과 화면에서 나감. 재도전은 할 수 없다.
-        Console.WriteLine($"방 {room.Id} 퇴장, 남은 플레이어 {remaining.Address}");
+        Console.WriteLine($"방 {room.Id} 퇴장, 남은 플레이어 {remaining.Nickname}");
     }
 
     // roomsLock 안에서 호출해 플레이어 목록과 준비 상태를 함께 전달한다.
     private static void BroadcastPlayers(GameRoom room)
     {
-        string message = $"ROOM_PLAYERS {room.Id} {room.Host.Address} {(room.Host.IsReady ? 1 : 0)}";
+        string message = $"ROOM_PLAYERS {room.Id} {room.Host.Nickname} {(room.Host.IsReady ? 1 : 0)}";
         if (room.Guest is ClientSession guest)
-            message += $" {guest.Address} {(guest.IsReady ? 1 : 0)}";
+            message += $" {guest.Nickname} {(guest.IsReady ? 1 : 0)}";
 
         room.Host.QueueMessage(message);
         room.Guest?.QueueMessage(message);

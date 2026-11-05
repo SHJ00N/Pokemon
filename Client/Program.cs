@@ -74,7 +74,7 @@ class Program
         ChannelReader<ClientEvent> events, StreamWriter writer, CancellationToken cancellationToken)
     {
         ISoundManager sound = SoundManager.Instance;
-        ClientState state = new LobbyState();
+        ClientState state = new NicknameState();
         if (state.BgmPath is string initialBgm)
             sound.PlayBgm(initialBgm);
         state.ShowMenu();

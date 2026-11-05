@@ -141,7 +141,7 @@ sealed class InGameState : ClientState
         {
             string[] parts = message.Split(' ', 3);
             if (parts.Length == 3 && int.TryParse(parts[1], out int roomId))
-                return ChangeState(new InRoomState(roomId, parts[2]));
+                return ChangeState(new InRoomState(roomId, parts[2], isHost: true));   // 남은 내가 방장
         }
         if (message.StartsWith("ERROR ") && submitted && battle == null)
         {
