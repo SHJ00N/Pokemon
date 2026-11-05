@@ -15,6 +15,9 @@ sealed class BattleSide
     // 출전 포켓몬이 쓰러져 다음 포켓몬을 골라야 하는 상태
     public bool MustSwitch { get; set; }
 
+    // 전투가 끝난 뒤 재도전을 신청했는지. 양쪽 모두 신청하면 포켓몬 선택부터 다시 시작한다.
+    public bool WantsRematch { get; set; }
+
     // 우리 편 전체에 걸리는 효과의 남은 턴. 0이면 없음. 교체해도 유지된다.
     public int ReflectTurns { get; set; }           // 리플렉터: 물리 데미지 절반
     public int LightScreenTurns { get; set; }       // 빛의장막: 특수 데미지 절반

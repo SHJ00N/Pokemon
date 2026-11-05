@@ -3,7 +3,8 @@ using Pokemon.Protocol;
 class GameRoom
 {
     public int Id { get; }
-    public ClientSession Host { get; }
+    // 전투가 시작된 뒤 방장이 나가면 남은 참여자가 방장이 된다.
+    public ClientSession Host { get; set; }
     public ClientSession? Guest { get; set; }
     public PokemonSelection[]? HostTeam { get; set; }
     public PokemonSelection[]? GuestTeam { get; set; }

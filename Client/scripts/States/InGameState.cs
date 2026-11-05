@@ -8,7 +8,7 @@ sealed class InGameState : ClientState
     private const int TeamSize = 3;
 
     // 전투 중 입력 단계
-    private enum BattleMenu { Waiting, Main, Fight, Switch, ForcedSwitch, BatonPass }
+    private enum BattleMenu { Waiting, Main, Fight, Switch, ForcedSwitch, BatonPass, Surrender }
     private const int BatonPassMoveId = 226;   // 배턴터치: 쓰기 전에 내보낼 포켓몬을 고른다.
     private int batonPassSlot;                 // 배턴터치를 고른 기술 슬롯
 
@@ -27,8 +27,15 @@ sealed class InGameState : ClientState
     private BattleView? battle;
     private BattleMenu menu = BattleMenu.Waiting;
     private BattleMenu menuBeforeWaiting = BattleMenu.Main;  // 서버가 선택을 거절하면 돌아갈 단계
-    private string? result;                                   // "WIN" 또는 "LOSE"
+    private BattleMenu menuBeforeSurrender = BattleMenu.Main; // 항복 확인에서 뒤로 가면 돌아갈 단계
+    private string? result;                                   // "WIN", "LOSE" 또는 "DRAW"
     private readonly List<string> battleLog = new();
+
+    // 재도전하면 서버가 포켓몬 목록을 다시 보내지 않으므로 이전 상태의 목록을 넘겨받는다.
+    public InGameState(PokemonCatalogResponse? catalog = null)
+    {
+        this.catalog = catalog;
+    }
 
     public override void ShowMenu() => InGameRenderer.Draw(
         catalog, pickedPokemon.Select(p => p.Name).ToList(), MoveTarget, selectedMoves, submitted,
@@ -38,12 +45,13 @@ sealed class InGameState : ClientState
 
     private string GetPrompt() => menu switch
     {
-        BattleMenu.Main => "행동을 선택하세요. 1. 싸운다 2. 교체: ",
+        BattleMenu.Main => "행동을 선택하세요. 1. 싸운다 2. 교체 3. 항복: ",
         BattleMenu.Fight => "공격할 기술의 번호를 선택하세요: ",
         BattleMenu.Switch => "교체할 포켓몬의 번호를 선택하세요: ",
         BattleMenu.ForcedSwitch => "포켓몬이 쓰러졌습니다. 내보낼 포켓몬의 번호를 선택하세요: ",
         BattleMenu.BatonPass => "배턴터치로 내보낼 포켓몬의 번호를 선택하세요: ",
-        _ => "상대방의 행동을 기다리고 있습니다."
+        BattleMenu.Surrender => "항복하면 패배하고 결과 화면으로 넘어갑니다. 1. 항복 0. 뒤로: ",
+        _ => "상대방의 행동을 기다리고 있습니다. (3. 항복)"
     };
 
     // 교체할 수 있는 팀 번호(0부터): 출전 중이 아니고 쓰러지지 않은 포켓몬
@@ -86,10 +94,38 @@ sealed class InGameState : ClientState
         }
         if (message.StartsWith("BATTLE_END "))
         {
-            result = message[11..];
+            // BATTLE_END <WIN|LOSE|DRAW> [SURRENDER|LEFT]: 항복했거나 상대가 나가서 끝났으면 이유가 붙는다.
+            string[] parts = message.Split(' ');
+            result = parts[1];
             menu = BattleMenu.Waiting;
-            Notification = null;
+            Notification = parts.Length < 3 ? null : (parts[1], parts[2]) switch
+            {
+                ("LOSE", "SURRENDER") => "항복했습니다.",
+                (_, "SURRENDER") => "상대방이 항복했습니다.",
+                (_, "LEFT") => "상대방이 나가서 항복으로 처리되었습니다. 재도전은 할 수 없습니다.",
+                _ => null
+            };
             return this;
+        }
+        switch (message)
+        {
+            case "REMATCH_REQUESTED":
+                Notification = "재도전을 신청했습니다. 상대방을 기다립니다.";
+                return this;
+            case "PLAYER_REMATCH":
+                Notification = "상대방이 재도전을 신청했습니다. 1. 재도전을 고르면 시작합니다.";
+                return this;
+            case "REMATCH_STARTED":
+                Notification = "재도전! 포켓몬과 기술을 다시 선택하세요.";
+                return ChangeState(new InGameState(catalog));
+            case "LEFT":
+                Notification = "방에서 나왔습니다.";
+                return ChangeState(new LobbyState());
+            case "PLAYER_LEFT":
+                Notification = result != null
+                    ? "상대방이 나갔습니다. 재도전은 할 수 없습니다."
+                    : "상대방이 나갔습니다.";
+                return this;
         }
         if (message == "SELECTION_ACCEPTED")
         {
@@ -97,12 +133,15 @@ sealed class InGameState : ClientState
             return this;
         }
         if (message == "ROOM_CLOSED")
-            return new LobbyState();
+        {
+            Notification = "방장이 나가서 방이 닫혔습니다.";
+            return ChangeState(new LobbyState());
+        }
         if (message.StartsWith("RETURN_TO_ROOM "))
         {
             string[] parts = message.Split(' ', 3);
             if (parts.Length == 3 && int.TryParse(parts[1], out int roomId))
-                return new InRoomState(roomId, parts[2]);
+                return ChangeState(new InRoomState(roomId, parts[2]));
         }
         if (message.StartsWith("ERROR ") && submitted && battle == null)
         {
@@ -122,7 +161,7 @@ sealed class InGameState : ClientState
         Notification = null;
 
         if (result != null)
-            Notification = "재도전·나가기는 아직 구현되지 않았습니다.";
+            await HandleResultInput(input, writer);
         else if (battle != null)
             await HandleBattleInput(input, writer);
         else if (catalog == null)
@@ -176,8 +215,23 @@ sealed class InGameState : ClientState
                     Notification = "교체할 수 있는 포켓몬이 없습니다.";
                 else if (number == 2)
                     menu = BattleMenu.Switch;
+                else if (number == 3)
+                    AskSurrender();
                 else
-                    Notification = "1. 싸운다 2. 교체 중에서 선택하세요.";
+                    Notification = "1. 싸운다 2. 교체 3. 항복 중에서 선택하세요.";
+                break;
+
+            case BattleMenu.Surrender:
+                if (number == 1)
+                {
+                    await writer.WriteLineAsync("SURRENDER");
+                    menuBeforeWaiting = menuBeforeSurrender;
+                    menu = BattleMenu.Waiting;
+                }
+                else if (input == "0")
+                    menu = menuBeforeSurrender;
+                else
+                    Notification = "1. 항복 0. 뒤로 중에서 선택하세요.";
                 break;
 
             case BattleMenu.Fight:
@@ -218,7 +272,34 @@ sealed class InGameState : ClientState
                 break;
 
             default:
-                Notification = "상대방의 행동을 기다리는 중입니다.";
+                // 상대가 행동을 고르지 않고 기다리게 해도 항복하고 나갈 수 있다.
+                if (number == 3)
+                    AskSurrender();
+                else
+                    Notification = "상대방의 행동을 기다리는 중입니다.";
+                break;
+        }
+    }
+
+    private void AskSurrender()
+    {
+        menuBeforeSurrender = menu;
+        menu = BattleMenu.Surrender;
+    }
+
+    // 결과 화면: 1. 재도전 2. 나가기
+    private async Task HandleResultInput(string input, StreamWriter writer)
+    {
+        switch (input)
+        {
+            case "1":
+                await writer.WriteLineAsync("REMATCH");
+                break;
+            case "2":
+                await writer.WriteLineAsync("LEAVE");
+                break;
+            default:
+                Notification = "1. 재도전 2. 나가기 중에서 선택하세요.";
                 break;
         }
     }

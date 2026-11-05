@@ -239,6 +239,61 @@ partial class RoomManager
         }
     }
 
+    // 전투 중 항복. 나가기와 같은 결과로 상대가 이긴다. 양쪽 모두 결과 화면에서 재도전을 신청할 수 있다.
+    public void Surrender(ClientSession session)
+    {
+        lock (roomsLock)
+        {
+            if (!TryGetBattle(session, out GameRoom room, out BattleSide me, out BattleSide other) || room.BattleOver)
+            {
+                session.QueueMessage("ERROR 지금은 항복할 수 없습니다.");
+                return;
+            }
+
+            room.BattleOver = true;
+            me.Player.QueueMessage("BATTLE_END LOSE SURRENDER");
+            other.Player.QueueMessage("BATTLE_END WIN SURRENDER");
+            Console.WriteLine($"방 {room.Id} 전투 종료 (항복: {session.Address})");
+        }
+    }
+
+    // 결과 화면에서 재도전 신청. 양쪽 모두 신청하면 포켓몬 선택부터 다시 시작한다.
+    public void RequestRematch(ClientSession session)
+    {
+        lock (roomsLock)
+        {
+            if (!TryGetBattle(session, out GameRoom room, out BattleSide me, out BattleSide other) || !room.BattleOver)
+            {
+                session.QueueMessage("ERROR 재도전은 전투가 끝난 뒤에 신청할 수 있습니다.");
+                return;
+            }
+            if (room.Guest == null)
+            {
+                session.QueueMessage("ERROR 상대방이 나가서 재도전할 수 없습니다.");
+                return;
+            }
+            if (me.WantsRematch)
+            {
+                session.QueueMessage("ERROR 이미 재도전을 신청했습니다.");
+                return;
+            }
+
+            me.WantsRematch = true;
+            if (!other.WantsRematch)
+            {
+                session.QueueMessage("REMATCH_REQUESTED");
+                other.Player.QueueMessage("PLAYER_REMATCH");
+                return;
+            }
+
+            // 포켓몬 목록은 클라이언트가 이미 가지고 있으므로 다시 보내지 않는다.
+            room.ResetBattle();
+            room.Host.QueueMessage("REMATCH_STARTED");
+            room.Guest.QueueMessage("REMATCH_STARTED");
+            Console.WriteLine($"방 {room.Id} 재도전 시작");
+        }
+    }
+
     // 새 턴을 시작한다. 난동 기술로 고정된 포켓몬은 행동을 자동으로 정한다.
     private void StartTurn(GameRoom room)
     {
@@ -468,13 +523,17 @@ partial class RoomManager
                 return;
             }
 
+            bool wasInGame = session.State is InGameState;
             session.RoomId = null;
             session.IsReady = false;
             session.State = new LobbyState();
             if (!rooms.TryGetValue(roomId, out GameRoom? room))
                 return;
 
-            if (room.Host.Id == session.Id)
+            ClientSession? opponent = room.Host.Id == session.Id ? room.Guest : room.Host;
+            if (wasInGame && room.HostSide != null && opponent != null)
+                LeaveBattle(room, opponent);
+            else if (room.Host.Id == session.Id)
             {
                 rooms.Remove(roomId);
                 if (room.Guest != null)
@@ -504,6 +563,23 @@ partial class RoomManager
             if (notify)
                 session.QueueMessage("LEFT");
         }
+    }
+
+    // roomsLock 안에서 호출한다. 전투가 시작된 뒤 한 명이 나가면(연결 종료 포함) 항복으로 처리한다.
+    // 남은 플레이어는 방장이 되어 결과 화면에 남고, 나가기를 고르면 방이 닫힌다.
+    private static void LeaveBattle(GameRoom room, ClientSession remaining)
+    {
+        room.Host = remaining;
+        room.Guest = null;
+        if (!room.BattleOver)
+        {
+            room.BattleOver = true;
+            remaining.QueueMessage("BATTLE_END WIN LEFT");
+            Console.WriteLine($"방 {room.Id} 전투 종료 (상대 퇴장)");
+        }
+        else
+            remaining.QueueMessage("PLAYER_LEFT");   // 결과 화면에서 나감. 재도전은 할 수 없다.
+        Console.WriteLine($"방 {room.Id} 퇴장, 남은 플레이어 {remaining.Address}");
     }
 
     // roomsLock 안에서 호출해 플레이어 목록과 준비 상태를 함께 전달한다.
