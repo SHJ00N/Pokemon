@@ -5,21 +5,88 @@ using Pokemon.Protocol;
 partial class RoomManager
 {
     private const int TeamSize = 3;
+    private const int MaxNicknameLength = 8;
 
     private readonly GameData data;
-    private readonly string catalogMessage;
+    private readonly string catalogMessage;     // POKEMON_CATALOG <Brotli로 압축한 JSON의 Base64>
+    public int CatalogJsonBytes { get; }        // 압축 전 JSON 크기
+    public int CatalogMessageBytes => catalogMessage.Length + 1;   // 실제로 보내는 크기 (ASCII, 줄바꿈 포함)
     private readonly object roomsLock = new();
     private readonly Dictionary<int, GameRoom> rooms = new();
+    private readonly HashSet<string> nicknames = new();     // 접속 중인 플레이어의 닉네임 (중복 금지)
     private int nextRoomId = 1000;
 
     public RoomManager(GameData data)
     {
         this.data = data;
-        var pokemon = data.PokemonById.Values.OrderBy(p => p.Id)
-            .Select(p => new PokemonCatalogEntry(p.Id, p.Name, GetTypes(p),
+        // 팀에 넣을 수 있는 폼만 도감번호 순으로 보낸다. 같은 종에 고를 수 있는 폼이 여럿이면 폼 이름을 붙인다.
+        var selectable = data.PokemonById.Values.Where(p => p.IsSelectable)
+            .OrderBy(p => p.SpeciesId).ThenBy(p => p.Id).ToArray();
+        var formCount = selectable.CountBy(p => p.SpeciesId).ToDictionary();
+        var pokemon = selectable
+            .Select(p => new PokemonCatalogEntry(p.Id, p.SpeciesId, p.Name,
+                formCount[p.SpeciesId] > 1 || !p.IsDefault ? p.FormName : null, GetTypes(p),
                 data.LearnableMovesByPokemonId[p.Id].Order().ToArray())).ToArray();
-        var moves = data.MovesById.Values.OrderBy(m => m.Id).Select(GetMove).ToArray();
-        catalogMessage = "POKEMON_CATALOG " + JsonSerializer.Serialize(new PokemonCatalogResponse(pokemon, moves));
+        // 기술은 고를 수 있는 폼이 배우는 것만 보낸다 (Z기술·다이맥스기 등은 빠진다).
+        var learnable = pokemon.SelectMany(p => p.LearnableMoveIds).ToHashSet();
+        var moves = data.MovesById.Values.Where(m => learnable.Contains(m.Id)).OrderBy(m => m.Id).Select(GetMove).ToArray();
+        // 게임마다 같은 목록을 보내므로 서버 시작 시 한 번만 압축해 둔다.
+        catalogMessage = "POKEMON_CATALOG " + CatalogCodec.Encode(new PokemonCatalogResponse(pokemon, moves), out int jsonBytes);
+        CatalogJsonBytes = jsonBytes;
+    }
+
+    // 접속 직후 닉네임을 정하고 로비로 보낸다. 닉네임은 띄어쓰기 없이 1~8글자이며 접속 중인 다른 플레이어와 겹치면 안 된다.
+    // 메시지를 띄어쓰기로 나누므로 닉네임에 띄어쓰기를 허용하지 않는다.
+    public void SetNickname(ClientSession session, string nickname)
+    {
+        lock (roomsLock)
+        {
+            if (session.State is not NicknameState)
+            {
+                session.QueueMessage("ERROR 이미 닉네임을 정했습니다.");
+                return;
+            }
+            if (nickname.Length is 0 or > MaxNicknameLength ||
+                nickname.Any(c => char.IsWhiteSpace(c) || char.IsControl(c)))
+            {
+                session.QueueMessage($"ERROR 닉네임은 띄어쓰기 없이 1~{MaxNicknameLength}글자로 입력하세요.");
+                return;
+            }
+            if (!nicknames.Add(nickname))
+            {
+                session.QueueMessage("ERROR 이미 사용 중인 닉네임입니다.");
+                return;
+            }
+
+            session.Nickname = nickname;
+            session.State = new LobbyState();
+            session.QueueMessage($"NAME_ACCEPTED {nickname}");
+            Console.WriteLine($"{session.Address}: 닉네임 {nickname}");
+        }
+    }
+
+    // 연결이 끊기면 방에서 내보내고 닉네임을 다른 플레이어가 쓸 수 있게 돌려준다.
+    public void Disconnect(ClientSession session)
+    {
+        lock (roomsLock)
+        {
+            LeaveRoom(session);
+            if (session.Nickname.Length > 0)
+                nicknames.Remove(session.Nickname);
+        }
+    }
+
+    // 로비의 방 목록. 게임 중이거나 가득 찬 방도 상태와 함께 보낸다.
+    public void SendRoomList(ClientSession session)
+    {
+        lock (roomsLock)
+        {
+            RoomSummary[] list = rooms.Values.OrderBy(room => room.Id)
+                .Select(room => new RoomSummary(room.Id, room.Host.Nickname, room.Guest == null ? 1 : 2,
+                    room.Host.State is not InRoomState))
+                .ToArray();
+            session.QueueMessage("ROOM_LIST " + JsonSerializer.Serialize(list));
+        }
     }
 
     public void CreateRoom(ClientSession session)
@@ -37,9 +104,9 @@ partial class RoomManager
             rooms.Add(roomId, room);
             session.RoomId = roomId;
             session.State = new InRoomState();
-            session.QueueMessage($"CREATED {roomId} {session.Address}");
+            session.QueueMessage($"CREATED {roomId} {session.Nickname}");
             BroadcastPlayers(room);
-            Console.WriteLine($"방 {roomId} 생성: {session.Address}");
+            Console.WriteLine($"방 {roomId} 생성: {session.Nickname} ({session.Address})");
         }
     }
 
@@ -71,10 +138,10 @@ partial class RoomManager
             room.Guest = session;
             session.RoomId = roomId;
             session.State = new InRoomState();
-            session.QueueMessage($"JOINED {roomId} {room.Host.Address}");
+            session.QueueMessage($"JOINED {roomId} {room.Host.Nickname}");
             room.Host.QueueMessage("PLAYER_JOINED");
             BroadcastPlayers(room);
-            Console.WriteLine($"방 {roomId} 입장: {session.Address}");
+            Console.WriteLine($"방 {roomId} 입장: {session.Nickname} ({session.Address})");
         }
     }
 
@@ -113,6 +180,7 @@ partial class RoomManager
                 guest.QueueMessage("GAME_STARTED");
                 room.Host.QueueMessage(catalogMessage);
                 guest.QueueMessage(catalogMessage);
+                room.TeamDeadline = Deadline(TeamTimeLimitSeconds);
             }
         }
     }
@@ -123,7 +191,7 @@ partial class RoomManager
         lock (roomsLock)
         {
             if (session.State is not InGameState || session.RoomId is not int roomId ||
-                !rooms.TryGetValue(roomId, out GameRoom? room) || room.Guest == null)
+                !rooms.TryGetValue(roomId, out GameRoom? room) || room.Guest == null || room.BattleOver)
             {
                 session.QueueMessage("ERROR 포켓몬을 선택할 수 있는 게임이 없습니다.");
                 return;
@@ -135,8 +203,9 @@ partial class RoomManager
                 session.QueueMessage("ERROR 이미 선택을 완료했습니다.");
                 return;
             }
+            // 같은 종은 폼이 달라도 한 마리만 넣을 수 있다 (예: 라이츄와 알로라 라이츄).
             if (team is not { Length: TeamSize } || team.Any(p => p == null || !IsValidSelection(p)) ||
-                team.Select(p => p.PokemonId).Distinct().Count() != TeamSize)
+                team.Select(p => data.PokemonById[p.PokemonId].SpeciesId).Distinct().Count() != TeamSize)
             {
                 session.QueueMessage("ERROR 서로 다른 포켓몬 3마리와 각각 배울 수 있는 서로 다른 기술 4개를 선택하세요.");
                 return;
@@ -148,6 +217,7 @@ partial class RoomManager
 
             if (room.HostTeam is { } hostTeam && room.GuestTeam is { } guestTeam)
             {
+                room.TeamDeadline = null;
                 room.HostSide = CreateSide(room.Host, hostTeam);
                 room.GuestSide = CreateSide(room.Guest, guestTeam);
                 SendBattleState(room);
@@ -239,6 +309,66 @@ partial class RoomManager
         }
     }
 
+    // 전투 중 항복. 나가기와 같은 결과로 상대가 이긴다. 양쪽 모두 결과 화면에서 재도전을 신청할 수 있다.
+    public void Surrender(ClientSession session)
+    {
+        lock (roomsLock)
+        {
+            if (!TryGetBattle(session, out GameRoom room, out BattleSide me, out BattleSide other) || room.BattleOver)
+            {
+                session.QueueMessage("ERROR 지금은 항복할 수 없습니다.");
+                return;
+            }
+
+            room.BattleOver = true;
+            me.Player.QueueMessage("BATTLE_END LOSE SURRENDER");
+            other.Player.QueueMessage("BATTLE_END WIN SURRENDER");
+            Console.WriteLine($"방 {room.Id} 전투 종료 (항복: {session.Nickname})");
+        }
+    }
+
+    // 결과 화면에서 재도전 신청. 양쪽 모두 신청하면 포켓몬 선택부터 다시 시작한다.
+    public void RequestRematch(ClientSession session)
+    {
+        lock (roomsLock)
+        {
+            // 포켓몬 선택 시간 초과로 끝났으면 전투 정보(BattleSide)가 없으므로 방 단위로 확인한다.
+            if (session.State is not InGameState || session.RoomId is not int roomId ||
+                !rooms.TryGetValue(roomId, out GameRoom? room) || !room.BattleOver)
+            {
+                session.QueueMessage("ERROR 재도전은 전투가 끝난 뒤에 신청할 수 있습니다.");
+                return;
+            }
+            if (room.Guest == null)
+            {
+                session.QueueMessage("ERROR 상대방이 나가서 재도전할 수 없습니다.");
+                return;
+            }
+            bool isHost = room.Host.Id == session.Id;
+            if (isHost ? room.HostRematch : room.GuestRematch)
+            {
+                session.QueueMessage("ERROR 이미 재도전을 신청했습니다.");
+                return;
+            }
+
+            if (isHost) room.HostRematch = true;
+            else room.GuestRematch = true;
+            if (!room.HostRematch || !room.GuestRematch)
+            {
+                session.QueueMessage("REMATCH_REQUESTED");
+                (isHost ? room.Guest : room.Host).QueueMessage("PLAYER_REMATCH");
+                return;
+            }
+
+            // 포켓몬 목록은 클라이언트가 이미 가지고 있으므로 다시 보내지 않는다.
+            room.ResetBattle();
+            room.TeamDeadline = Deadline(TeamTimeLimitSeconds);
+            room.Host.QueueMessage("REMATCH_STARTED");
+            room.Guest.QueueMessage("REMATCH_STARTED");
+            Console.WriteLine($"방 {room.Id} 재도전 시작");
+        }
+    }
+
     // 새 턴을 시작한다. 난동 기술로 고정된 포켓몬은 행동을 자동으로 정한다.
     private void StartTurn(GameRoom room)
     {
@@ -250,6 +380,7 @@ partial class RoomManager
                     side.ChosenMove = slot;
         }
         SendPrompts(room);
+        room.ActionDeadline = Deadline(ActionTimeLimitSeconds);   // 클라이언트도 안내를 받은 순간부터 센다.
         TryResolveTurn(room);   // 양쪽 모두 고정되어 있으면 바로 진행한다.
     }
 
@@ -286,6 +417,7 @@ partial class RoomManager
 
         host.ChosenMove = guest.ChosenMove = null;
         host.ChosenSwitch = guest.ChosenSwitch = null;
+        host.SkipTurn = guest.SkipTurn = false;
         host.BatonTarget = guest.BatonTarget = null;
         SendBattleState(room);
 
@@ -433,7 +565,7 @@ partial class RoomManager
     }
 
     private bool IsValidSelection(PokemonSelection selection) =>
-        data.PokemonById.ContainsKey(selection.PokemonId) &&
+        data.PokemonById.TryGetValue(selection.PokemonId, out PokemonInfo? info) && info.IsSelectable &&
         selection.MoveIds is { Length: 4 } ids && ids.Distinct().Count() == 4 &&
         ids.All(id => data.LearnableMovesByPokemonId[selection.PokemonId].Contains(id));
 
@@ -454,7 +586,7 @@ partial class RoomManager
         new(move.Id, move.Name, GetType(move.TypeId), move.Power, move.Accuracy);
 
     private PokemonView GetPokemon(BattlePokemon pokemon) =>
-        new(pokemon.Info.Id, pokemon.Info.Name, pokemon.Hp, pokemon.MaxHp, GetTypes(pokemon.Info),
+        new(pokemon.Info.Id, pokemon.Info.SpeciesId, pokemon.Info.Name, pokemon.Hp, pokemon.MaxHp, GetTypes(pokemon.Info),
             pokemon.Status == null ? null : StatusName(pokemon.Status), DescribeStages(pokemon));
 
     public void LeaveRoom(ClientSession session, bool notify = false)
@@ -468,13 +600,17 @@ partial class RoomManager
                 return;
             }
 
+            bool wasInGame = session.State is InGameState;
             session.RoomId = null;
             session.IsReady = false;
             session.State = new LobbyState();
             if (!rooms.TryGetValue(roomId, out GameRoom? room))
                 return;
 
-            if (room.Host.Id == session.Id)
+            ClientSession? opponent = room.Host.Id == session.Id ? room.Guest : room.Host;
+            if (wasInGame && (room.HostSide != null || room.BattleOver) && opponent != null)
+                LeaveBattle(room, opponent);
+            else if (room.Host.Id == session.Id)
             {
                 rooms.Remove(roomId);
                 if (room.Guest != null)
@@ -495,7 +631,7 @@ partial class RoomManager
                     room.Host.State = new InRoomState();
                     room.Host.IsReady = false;
                     room.ResetBattle();
-                    room.Host.QueueMessage($"RETURN_TO_ROOM {room.Id} {room.Host.Address}");
+                    room.Host.QueueMessage($"RETURN_TO_ROOM {room.Id} {room.Host.Nickname}");
                 }
                 BroadcastPlayers(room);
                 Console.WriteLine($"방 {roomId} 참여자 퇴장");
@@ -506,12 +642,30 @@ partial class RoomManager
         }
     }
 
+    // roomsLock 안에서 호출한다. 전투가 시작됐거나 결과가 난 뒤 한 명이 나가면(연결 종료 포함) 처리한다.
+    // 전투 중이었다면 항복으로 처리한다.
+    // 남은 플레이어는 방장이 되어 결과 화면에 남고, 나가기를 고르면 방이 닫힌다.
+    private static void LeaveBattle(GameRoom room, ClientSession remaining)
+    {
+        room.Host = remaining;
+        room.Guest = null;
+        if (!room.BattleOver)
+        {
+            room.BattleOver = true;
+            remaining.QueueMessage("BATTLE_END WIN LEFT");
+            Console.WriteLine($"방 {room.Id} 전투 종료 (상대 퇴장)");
+        }
+        else
+            remaining.QueueMessage("PLAYER_LEFT");   // 결과 화면에서 나감. 재도전은 할 수 없다.
+        Console.WriteLine($"방 {room.Id} 퇴장, 남은 플레이어 {remaining.Nickname}");
+    }
+
     // roomsLock 안에서 호출해 플레이어 목록과 준비 상태를 함께 전달한다.
     private static void BroadcastPlayers(GameRoom room)
     {
-        string message = $"ROOM_PLAYERS {room.Id} {room.Host.Address} {(room.Host.IsReady ? 1 : 0)}";
+        string message = $"ROOM_PLAYERS {room.Id} {room.Host.Nickname} {(room.Host.IsReady ? 1 : 0)}";
         if (room.Guest is ClientSession guest)
-            message += $" {guest.Address} {(guest.IsReady ? 1 : 0)}";
+            message += $" {guest.Nickname} {(guest.IsReady ? 1 : 0)}";
 
         room.Host.QueueMessage(message);
         room.Guest?.QueueMessage(message);

@@ -4,13 +4,36 @@ namespace Client;
 
 static class InGameRenderer
 {
+    // 목록에 표시하는 이름. 같은 종의 다른 폼과 구분해야 하면 폼 이름을 붙인다. 예: 라이츄 (알로라의 모습)
+    public static string DisplayName(PokemonCatalogEntry entry) =>
+        entry.FormName == null ? entry.Name : $"{entry.Name} ({entry.FormName})";
+
+    // 남은 시간은 입력 줄 맨 앞(이 열)에 그린다. 그리지 않은 화면이면 null
+    private static int? timerColumn;
+
+    // 남은 시간 표시. 매초 같은 폭으로 고쳐 쓸 수 있게 폭을 고정한다.
+    private static string FormatTimer(int seconds) =>
+        TextRenderer.FitToWidth(seconds > 0 ? $"[남은 시간 {seconds,2}초]" : "[시간 초과]", 16) + " ";
+
+    // 화면 전체를 다시 그리지 않고 입력 줄의 남은 시간만 고쳐 쓴다.
+    // 커서 위치를 저장(ESC 7)하고 줄 맨 앞으로 가서 쓴 뒤 되돌리므로(ESC 8), 입력 중인 글자는 그대로 남는다.
+    public static void UpdateTimer(int seconds)
+    {
+        if (timerColumn is not int column)
+            return;
+        string moveRight = column > 0 ? $"\x1b[{column}C" : "";
+        Console.Write($"\x1b7\r{moveRight}{FormatTimer(seconds)}\x1b8");
+    }
+
     // switchList: 교체 메뉴일 때 고를 수 있는 팀 번호(0부터). null이면 기술 목록을 표시한다.
+    // timerSeconds: 선택 제한시간의 남은 초. null이면 표시하지 않는다.
     public static void Draw(PokemonCatalogResponse? catalog, IReadOnlyList<string> teamNames,
         PokemonCatalogEntry? selectedPokemon, IReadOnlyList<int> selectedMoves, bool submitted,
         BattleView? battle, string? notification, IReadOnlyList<string> battleLog, string prompt,
-        IReadOnlyList<int>? switchList, bool showBack, string? result)
+        IReadOnlyList<int>? switchList, bool showBack, string? result, int? timerSeconds)
     {
         TextRenderer.Clear();
+        timerColumn = null;
         if (result != null)
         {
             DrawResult(result, notification);
@@ -18,7 +41,7 @@ static class InGameRenderer
         }
         if (battle != null)
         {
-            DrawBattle(battle, notification, battleLog, prompt, switchList, showBack);
+            DrawBattle(battle, notification, battleLog, prompt, switchList, showBack, timerSeconds);
             return;
         }
 
@@ -35,7 +58,7 @@ static class InGameRenderer
             DrawPokemonCatalog(catalog.Pokemon);
             if (teamNames.Count > 0)
                 TextRenderer.WriteLine("선택한 팀: " + string.Join(" / ", teamNames));
-            TextRenderer.WriteLine($"{teamNames.Count + 1}번째 포켓몬을 선택해주세요. (도감번호 입력)");
+            TextRenderer.WriteLine($"{teamNames.Count + 1}번째 포켓몬을 선택해주세요. (목록의 번호 입력, 리전폼 등은 10001 이후 번호)");
         }
         else
         {
@@ -43,13 +66,19 @@ static class InGameRenderer
             DrawMoveCatalog(selectedPokemon, selectedPokemon.LearnableMoveIds.Select(id => movesById[id]));
             TextRenderer.WriteLine("선택한 팀: " + string.Join(" / ", teamNames));
             TextRenderer.WriteLine("선택한 기술: " + string.Join(" / ", selectedMoves.Select(id => movesById[id].Name)));
-            // 팀에 같은 포켓몬이 없으므로 이름으로 몇 번째인지 찾는다.
-            int order = teamNames.ToList().IndexOf(selectedPokemon.Name) + 1;
+            // 팀에 같은 종이 없으므로 이름으로 몇 번째인지 찾는다.
+            int order = teamNames.ToList().IndexOf(DisplayName(selectedPokemon)) + 1;
             TextRenderer.Write($"{order}번째 포켓몬 ");
-            TypeColorRenderer.WriteColored(selectedPokemon.Name, SelectedPokemonColor);
+            TypeColorRenderer.WriteColored(DisplayName(selectedPokemon), SelectedPokemonColor);
             TextRenderer.WriteLine($"의 {selectedMoves.Count + 1}번 기술 번호를 입력하세요 (서로 다른 기술 4개).");
         }
         if (notification != null) TextRenderer.WriteLine("\n" + notification);
+        // 마지막 줄이 입력 줄이다. 남은 시간 뒤에서 입력한다.
+        if (catalog != null && timerSeconds is int seconds)
+        {
+            TextRenderer.Write(FormatTimer(seconds) + (submitted ? "" : "> "));
+            timerColumn = 0;
+        }
     }
 
     private static void DrawPokemonCatalog(IEnumerable<PokemonCatalogEntry> pokemon)
@@ -57,7 +86,7 @@ static class InGameRenderer
         TextRenderer.WriteLine("포켓몬 목록");
         foreach (PokemonCatalogEntry entry in pokemon)
         {
-            TextRenderer.Write($"{entry.PokemonId,3}. {TextRenderer.FitToWidth(entry.Name, 10)}");
+            TextRenderer.Write($"{entry.PokemonId,5}. {TextRenderer.FitToWidth(DisplayName(entry), 32)}");
             foreach (TypeView type in entry.Types)
             {
                 TextRenderer.Write(" ");
@@ -73,8 +102,9 @@ static class InGameRenderer
 
     private static void DrawMoveCatalog(PokemonCatalogEntry pokemon, IEnumerable<MoveView> moves)
     {
-        TypeColorRenderer.WriteColored(pokemon.Name, SelectedPokemonColor);
-        TextRenderer.WriteLine($"{TextRenderer.Josa(pokemon.Name, "이", "가")} 배울 수 있는 기술 목록");
+        TypeColorRenderer.WriteColored(DisplayName(pokemon), SelectedPokemonColor);
+        // 조사는 마지막 한글(폼 이름이 있으면 폼 이름)에 맞춘다.
+        TextRenderer.WriteLine($"{TextRenderer.Josa(pokemon.FormName ?? pokemon.Name, "이", "가")} 배울 수 있는 기술 목록");
         TextRenderer.WriteLine("번호 타입    기술이름 위력 명중률");
         foreach (MoveView move in moves)
         {
@@ -86,7 +116,7 @@ static class InGameRenderer
     }
 
     private static void DrawBattle(BattleView battle, string? notification, IReadOnlyList<string> battleLog,
-        string prompt, IReadOnlyList<int>? switchList, bool showBack)
+        string prompt, IReadOnlyList<int>? switchList, bool showBack, int? timerSeconds)
     {
         int width = Console.BufferWidth;
         int height = Console.BufferHeight;
@@ -100,8 +130,8 @@ static class InGameRenderer
         int rightX = width / 2 + 1;
         int columns = width / 2 - 4;
         int maxRows = height - 19;
-        string[] player = PokemonRenderer.Load(active.Pokemon.PokemonId, maxRows, columns, flip: true);
-        string[] opponent = PokemonRenderer.Load(battle.Opponent.PokemonId, maxRows, columns, flip: false);
+        string[] player = PokemonRenderer.Load(active.Pokemon.PokemonId, active.Pokemon.SpeciesId, maxRows, columns, flip: true);
+        string[] opponent = PokemonRenderer.Load(battle.Opponent.PokemonId, battle.Opponent.SpeciesId, maxRows, columns, flip: false);
         TextRenderer.At(2, 0, "내 포켓몬");
         TextRenderer.At(rightX, 0, "상대 포켓몬");
         PokemonRenderer.Draw(player, 2, 2);
@@ -139,8 +169,10 @@ static class InGameRenderer
             TextRenderer.At(2, statusY + 9 + index, TextRenderer.FitToWidth(battleLog[index], width - 4));
         if (notification != null)
             TextRenderer.At(2, statusY + 14, TextRenderer.FitToWidth(notification, width - 4));
-        // 입력 커서가 안내 문구 바로 뒤에 오도록 마지막에 출력한다.
-        TextRenderer.At(2, statusY + 15, prompt);
+        // 입력 커서가 안내 문구 바로 뒤에 오도록 마지막에 출력한다. 남은 시간은 그 줄 맨 앞에 둔다.
+        TextRenderer.At(2, statusY + 15, (timerSeconds is int seconds ? FormatTimer(seconds) : "") + prompt);
+        if (timerSeconds != null)
+            timerColumn = 2;
     }
 
     private static void DrawResult(string result, string? notification)

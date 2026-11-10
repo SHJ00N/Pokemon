@@ -9,6 +9,7 @@
 
   <ItemGroup>
     <Compile Include="..\Shared\GameMessages.cs" Link="scripts\GameMessages.cs" />
+    <Compile Include="..\Shared\CatalogCodec.cs" Link="scripts\CatalogCodec.cs" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.12" />
   </ItemGroup>
 

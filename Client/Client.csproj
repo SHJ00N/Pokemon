@@ -9,6 +9,7 @@
 
   <ItemGroup>
     <Compile Include="..\Shared\GameMessages.cs" Link="scripts\GameMessages.cs" />
+    <Compile Include="..\Shared\CatalogCodec.cs" Link="scripts\CatalogCodec.cs" />
     <None Update="resources\pokemon_scripts\*.txt"
           CopyToOutputDirectory="PreserveNewest"
           CopyToPublishDirectory="PreserveNewest" />
@@ -17,7 +18,8 @@
           CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
-  <PropertyGroup>
+  <!-- lib/fmod.dll은 Windows x64 전용이다. macOS(Apple Silicon)에서 x64로 고정하면 실행되지 않으므로 Windows에서만 지정한다. -->
+  <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('Windows'))">
     <PlatformTarget>x64</PlatformTarget>
   </PropertyGroup>
 
@@ -26,6 +28,12 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
       <TargetPath>fmod.dll</TargetPath>
+    </None>
+    <!-- macOS용 FMOD Core 라이브러리. 없으면 소리 없이 실행된다. -->
+    <None Update="lib/libfmod.dylib">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <TargetPath>libfmod.dylib</TargetPath>
     </None>
   </ItemGroup>
 </Project>

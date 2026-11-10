@@ -6,19 +6,31 @@ namespace Client;
 /// </summary>
 sealed class SoundManager : ISoundManager
 {
-    private static SoundManager? instance;
+    private static ISoundManager? instance;
 
     /// <summary>Program에서 초기화한 클라이언트 공용 오디오 관리자.</summary>
     public static ISoundManager Instance => instance
         ?? throw new InvalidOperationException("SoundManager를 먼저 초기화해야 합니다.");
 
-    /// <summary>시작 시 한 번 호출하고 반환한 인스턴스를 using으로 관리한다.</summary>
+    /// <summary>
+    /// 시작 시 한 번 호출하고 반환한 인스턴스를 using으로 관리한다.
+    /// FMOD 라이브러리가 없거나 초기화에 실패하면 소리 없이 동작하는 관리자를 반환한다.
+    /// </summary>
     public static ISoundManager Initialize(int maxChannels = 128)
     {
         if (instance != null)
             throw new InvalidOperationException("SoundManager가 이미 초기화되어 있습니다.");
 
-        instance = new SoundManager(maxChannels);
+        try
+        {
+            instance = new SoundManager(maxChannels);
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or BadImageFormatException or InvalidOperationException)
+        {
+            // 예: macOS에 libfmod.dylib가 없는 경우. 사운드 때문에 게임이 멈추지 않게 한다.
+            Console.Error.WriteLine($"사운드를 사용할 수 없어 소리 없이 실행합니다: {ex.Message}");
+            instance = new SilentSoundManager();
+        }
         return instance;
     }
 
@@ -163,5 +175,25 @@ sealed class SoundManager : ISoundManager
     {
         if (result != FMOD.RESULT.OK)
             throw new InvalidOperationException($"FMOD 오류 ({result}): {FMOD.Error.String(result)}");
+    }
+
+    /// <summary>FMOD를 사용할 수 없을 때의 무음 관리자. 모든 재생 요청을 무시한다.</summary>
+    private sealed class SilentSoundManager : ISoundManager
+    {
+        public void LoadSound(string id, string path) { }
+        public void PlaySound(string id) { }
+        public void PlayBgm(string path, bool loop = true) { }
+        public void StopBgm() { }
+        public void StopAll() { }
+        public void SetMasterVolume(float volume) { }
+        public void SetBgmVolume(float volume) { }
+        public void SetSoundVolume(float volume) { }
+        public void Update() { }
+
+        public void Dispose()
+        {
+            if (ReferenceEquals(instance, this))
+                instance = null;
+        }
     }
 }

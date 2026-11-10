@@ -11,9 +11,10 @@ class ClientSession
     public Guid Id { get; } = Guid.NewGuid();
     public string Address { get; }
     // RoomManager의 잠금 안에서만 읽고 변경한다.
+    public string Nickname { get; set; } = "";   // 접속 직후 NAME 명령으로 정한다. 방 이름과 플레이어 목록에 표시된다.
     public int? RoomId { get; set; }
     public bool IsReady { get; set; }
-    public ClientState State { get; set; } = new LobbyState();
+    public ClientState State { get; set; } = new NicknameState();
 
     public ClientSession(Socket socket, RoomManager rooms)
     {
@@ -46,17 +47,20 @@ class ClientSession
         }
         finally
         {
-            rooms.LeaveRoom(this);
+            rooms.Disconnect(this);
             outgoing.Writer.TryComplete();
             socket.Dispose();
             await sending;
         }
     }
 
+    private const int MaxCommandBytes = 256;   // 줄바꿈을 뺀 명령 하나의 최대 크기
+
     private async Task ReceiveCommandsAsync()
     {
         byte[] buffer = new byte[1024];
-        var line = new StringBuilder();
+        byte[] line = new byte[MaxCommandBytes];
+        int length = 0;
 
         while (true)
         {
@@ -64,22 +68,24 @@ class ClientSession
             if (received == 0)
                 return;
 
-            // 숫자 + 줄바꿈: 분할 수신과 여러 명령의 합쳐진 수신을 처리한다.
+            // 명령 + 줄바꿈: 분할 수신과 여러 명령의 합쳐진 수신을 처리한다.
+            // UTF-8에서 줄바꿈 바이트(0x0A)는 한글 같은 여러 바이트 글자 안에 나오지 않으므로,
+            // 바이트 단위로 줄을 자른 뒤 한 줄씩 디코딩하면 글자가 중간에 잘리지 않는다.
             for (int index = 0; index < received; index++)
             {
-                char character = (char)buffer[index];
-                if (character == '\n')
+                byte value = buffer[index];
+                if (value == (byte)'\n')
                 {
-                    string command = line.ToString().TrimEnd('\r');
-                    line.Clear();
+                    string command = Encoding.UTF8.GetString(line, 0, length).TrimEnd('\r');
+                    length = 0;
                     if (!HandleCommand(command))
                         return;
                 }
                 else
                 {
-                    line.Append(character);
-                    if (line.Length > 256)
+                    if (length == MaxCommandBytes)
                         return; // 잘못된 입력이 무한히 쌓이지 않게 제한한다.
+                    line[length++] = value;
                 }
             }
         }

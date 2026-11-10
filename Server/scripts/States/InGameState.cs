@@ -44,6 +44,19 @@ sealed class InGameState : ClientState
             return true;
         }
 
+        switch (command)
+        {
+            case "SURRENDER":   // 전투 중 항복. 상대가 이기고 양쪽 모두 결과 화면으로 간다.
+                rooms.Surrender(session);
+                return true;
+            case "REMATCH":     // 결과 화면에서 재도전 신청
+                rooms.RequestRematch(session);
+                return true;
+            case "LEAVE":       // 방에서 나가기. 전투 중이면 항복으로 처리한다.
+                rooms.LeaveRoom(session, notify: true);
+                return true;
+        }
+
         session.QueueMessage("ERROR 포켓몬과 기술을 먼저 선택하세요.");
         return true;
     }
