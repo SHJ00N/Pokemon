@@ -9,6 +9,9 @@ abstract class ClientState
     public abstract Task<bool> HandleCommand(
         string input, StreamWriter writer, CancellationToken cancellationToken);
 
+    // Runs on the client's single event loop so animated output never races with menus.
+    public virtual void OnFrame() { }
+
     public virtual ClientState HandleServerMessage(string message)
     {
         SetServerMessage(message.StartsWith("ERROR ") ? message[6..] : message);

@@ -47,14 +47,55 @@ static class PokemonRenderer
         return lines;
     }
 
-    public static void Draw(string[] lines, int x, int y)
+    public static void Draw(string[] lines, int x, int y, bool flash = false)
     {
         for (int row = 0; row < lines.Length; row++)
         {
             Console.SetCursorPosition(x, y + row);
-            Console.Write(lines[row]);
+            Console.Write(flash ? Flash(lines[row]) : lines[row]);
+            Console.Write("\x1b[0m");
         }
     }
+
+    public static void DrawCell(string[] lines, int x, int y, int row, int column, bool flash = false)
+    {
+        Console.SetCursorPosition(x, y);
+        if (row < 0 || row >= lines.Length)
+        {
+            Console.Write(' ');
+            return;
+        }
+
+        List<(string Ansi, char Character)> cells = Parse(lines[row]);
+        if (column < 0 || column >= cells.Count)
+        {
+            Console.Write(' ');
+            return;
+        }
+        var cell = cells[column];
+        Console.Write(cell.Ansi);
+        if (flash) Console.Write("\x1b[7m");
+        Console.Write(cell.Character);
+        Console.Write("\x1b[0m");
+    }
+
+    public static (int MinX, int MaxX) GetHorizontalBounds(string[] lines)
+    {
+        int minX = int.MaxValue, maxX = -1;
+        foreach (string line in lines)
+        {
+            List<(string Ansi, char Character)> cells = Parse(line);
+            for (int column = 0; column < cells.Count; column++)
+                if (cells[column].Character != ' ')
+                {
+                    minX = Math.Min(minX, column);
+                    maxX = Math.Max(maxX, column);
+                }
+        }
+        return maxX < 0 ? (0, 0) : (minX, maxX);
+    }
+
+    private static string Flash(string line) => AnsiCode.Replace(line, match => match.Value + "\x1b[7m");
 
     private static List<(string Ansi, char Character)> Parse(string line)
     {

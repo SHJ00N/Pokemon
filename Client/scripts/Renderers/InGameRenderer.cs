@@ -1,9 +1,37 @@
+using System.Globalization;
 using Pokemon.Protocol;
 
 namespace Client;
 
 static class InGameRenderer
 {
+
+    private static readonly HashSet<(int X, int Y)> previousEffectCells = new();
+    private static int drawnPlayerOffset, drawnOpponentOffset;
+    private static bool drawnPlayerFlash, drawnOpponentFlash, battleBaseInitialized;
+
+    private static readonly Dictionary<string, string[]> EffectSprites = new()
+    {
+        ["노말"] = ["..###..", ".##.##.", "###*###", "###.###", ".#####.", "..###..", "...#..."],
+        ["불꽃"] = ["...*...", "..*#*..", ".*###+.", ".#####.", ".#####.", "..###..", "...#..."],
+        ["물"] = ["...#...", "..###..", ".#####.", "#######", "#######", ".#####.", "..###.."],
+        ["전기"] = ["....#..", "...##..", "..##...", "#######", "..##...", ".##....", "##....."],
+        ["풀"] = ["...##..", "..###*.", ".#####.", "#####..", ".####..", "..##...", "..#...."],
+        ["얼음"] = ["...#...", ".#.+.#.", "..###..", "###+###", "..###..", ".#.+.#.", "...#..."],
+        ["격투"] = ["...##..", "..####.", ".#####.", "#######", ".#####.", "..###..", "..#...."],
+        ["독"] = [".*...*.", "..###..", ".#####.", "##.#.##", "#######", "..#.#..", "......."],
+        ["땅"] = ["...#...", "..###..", "#######", ".##.##.", "##...##", ".#...#.", "......."],
+        ["비행"] = ["#.....#", "##...##", "###.###", "#######", ".#####.", "..###..", "...#..."],
+        ["에스퍼"] = ["..###..", ".#...#.", "#..*..#", "#.###.#", "#..*..#", ".#...#.", "..###.."],
+        ["벌레"] = [".#...#.", "##.#.##", ".#####.", "..###..", ".#####.", "##.#.##", ".#...#."],
+        ["바위"] = ["..###..", ".#####.", "#######", "###+###", "#######", ".#####.", "..###.."],
+        ["고스트"] = ["..###..", ".#####.", "###+###", "###.###", ".#####.", "..#.#..", ".#...#."],
+        ["드래곤"] = ["..##...", ".####..", "#######", "#######", ".####..", "..###*.", "..##..."],
+        ["악"] = ["#..#..#", "#.##.#.", ".#####.", "..###..", "...#...", "..#.#..", ".#...#."],
+        ["강철"] = ["...##..", ".####..", "######.", "###*###", ".######", "..####.", "...##.."],
+        ["페어리"] = ["...#...", "..###..", "#######", ".#####.", "..###..", ".#...#.", "*.....*"]
+    };
+
     // 목록에 표시하는 이름. 같은 종의 다른 폼과 구분해야 하면 폼 이름을 붙인다. 예: 라이츄 (알로라의 모습)
     public static string DisplayName(PokemonCatalogEntry entry) =>
         entry.FormName == null ? entry.Name : $"{entry.Name} ({entry.FormName})";
@@ -25,6 +53,7 @@ static class InGameRenderer
         // "\x1b7"은 C#에서 \x가 16진수를 최대 4자리까지 읽어 'Ʒ'(U+01B7) 한 글자가 된다. \u는 정확히 4자리만 읽는다.
         Console.Write($"\u001b7\r{moveRight}{FormatTimer(seconds)}\u001b8");
     }
+
 
     // switchList: 교체 메뉴일 때 고를 수 있는 팀 번호(0부터). null이면 기술 목록을 표시한다.
     // timerSeconds: 선택 제한시간의 남은 초. null이면 표시하지 않는다.
@@ -137,6 +166,10 @@ static class InGameRenderer
         TextRenderer.At(rightX, 0, "상대 포켓몬");
         PokemonRenderer.Draw(player, 2, 2);
         PokemonRenderer.Draw(opponent, rightX, 2);
+        previousEffectCells.Clear();
+        drawnPlayerOffset = drawnOpponentOffset = 0;
+        drawnPlayerFlash = drawnOpponentFlash = false;
+        battleBaseInitialized = true;
         int statusY = Math.Max(player.Length, opponent.Length) + 3;
         DrawStatus(active.Pokemon, 2, statusY, columns);
         DrawStatus(battle.Opponent, rightX, statusY, columns);
@@ -174,6 +207,208 @@ static class InGameRenderer
         TextRenderer.At(2, statusY + 15, (timerSeconds is int seconds ? FormatTimer(seconds) : "") + prompt);
         if (timerSeconds != null)
             timerColumn = 2;
+    }
+
+    // Animation frames update only the sprite area, leaving menus and logs steady.
+    public static void DrawBattleFrame(BattleView battle, int playerJumpOffset, int opponentJumpOffset,
+        bool flashPlayer, bool flashOpponent,
+        string? effectColor, string? effectType, bool effectFromPlayer, double effectProgress)
+    {
+        int cursorX = Console.CursorLeft;
+        int cursorY = Console.CursorTop;
+        int width = Console.BufferWidth;
+        int height = Console.BufferHeight;
+        if (width < 76 || height < 27) return;
+
+        int rightX = width / 2 + 1;
+        int columns = width / 2 - 4;
+        int maxRows = height - 19;
+        string[] player = PokemonRenderer.Load(battle.Team[battle.Active].Pokemon.PokemonId, maxRows, columns, flip: true);
+        string[] opponent = PokemonRenderer.Load(battle.Opponent.PokemonId, maxRows, columns, flip: false);
+
+        try
+        {
+            bool redrawSprites = !battleBaseInitialized || playerJumpOffset != drawnPlayerOffset ||
+                opponentJumpOffset != drawnOpponentOffset || flashPlayer != drawnPlayerFlash ||
+                flashOpponent != drawnOpponentFlash;
+            if (redrawSprites)
+            {
+                previousEffectCells.Clear();
+                ClearSpriteArea(2, player.Length, columns);
+                ClearSpriteArea(rightX, opponent.Length, columns);
+                PokemonRenderer.Draw(player, 2, 2 + playerJumpOffset, flashPlayer);
+                PokemonRenderer.Draw(opponent, rightX, 2 + opponentJumpOffset, flashOpponent);
+                drawnPlayerOffset = playerJumpOffset;
+                drawnOpponentOffset = opponentJumpOffset;
+                drawnPlayerFlash = flashPlayer;
+                drawnOpponentFlash = flashOpponent;
+                battleBaseInitialized = true;
+            }
+            else
+                RestorePreviousEffectCells(player, opponent, rightX, columns);
+
+            if (effectColor != null && effectType != null && effectProgress is >= 0 and <= 1)
+            {
+                var (_, playerMax) = PokemonRenderer.GetHorizontalBounds(player);
+                var (opponentMin, _) = PokemonRenderer.GetHorizontalBounds(opponent);
+                int playerFront = 2 + playerMax;
+                int opponentFront = rightX + opponentMin;
+                int leftStart = playerFront - 3, leftEnd = opponentFront - 3;
+                if (leftEnd < leftStart)
+                    (leftStart, leftEnd) = (playerFront, opponentFront);
+                int start = effectFromPlayer ? leftStart : leftEnd;
+                int end = effectFromPlayer ? leftEnd : leftStart;
+                double travelProgress = Math.Clamp(effectProgress / 0.78, 0, 1);
+                int x = start + (int)Math.Round((end - start) * travelProgress);
+                int targetOffset = effectFromPlayer ? opponentJumpOffset : playerJumpOffset;
+                int y = Math.Max(4, 2 + Math.Max(player.Length, opponent.Length) / 2 + targetOffset);
+                y += TypeMotionOffset(effectType, effectProgress);
+                if (x >= 0 && x < width - 1 && y < height)
+                {
+                    if (effectProgress < 0.78)
+                    {
+                        int direction = effectFromPlayer ? 1 : -1;
+                        DrawTypeTrail(x, y, effectType, direction, effectColor, width, height, previousEffectCells);
+                        DrawTypeSprite(x, y, effectType, effectColor, width, height, previousEffectCells);
+                    }
+                    else
+                    {
+                        DrawTypeSprite(end, y, effectType, effectColor, width, height, previousEffectCells);
+                        int incoming = effectFromPlayer ? -1 : 1;
+                        foreach (var (offsetX, offsetY) in new[]
+                        {
+                            (-5, 0), (-4, -4), (-4, 4), (-2, -5), (-2, 5), (0, -5), (0, 5)
+                        })
+                            DrawEffectAt(end + offsetX * incoming, y + offsetY, "■", effectColor, width, height,
+                                previousEffectCells, bold: true);
+                    }
+                }
+            }
+        }
+        finally
+        {
+            if (cursorX < Console.BufferWidth && cursorY < Console.BufferHeight)
+                Console.SetCursorPosition(cursorX, cursorY);
+        }
+    }
+
+    private static void RestorePreviousEffectCells(string[] player, string[] opponent, int rightX, int columns)
+    {
+        foreach (var (x, y) in previousEffectCells)
+        {
+            if (x >= 2 && x < 2 + columns)
+                PokemonRenderer.DrawCell(player, x, y, y - 2 - drawnPlayerOffset, x - 2, drawnPlayerFlash);
+            else if (x >= rightX && x < rightX + columns)
+                PokemonRenderer.DrawCell(opponent, x, y, y - 2 - drawnOpponentOffset, x - rightX, drawnOpponentFlash);
+            else
+            {
+                Console.SetCursorPosition(x, y);
+                Console.Write(" \x1b[0m");
+            }
+        }
+        previousEffectCells.Clear();
+    }
+
+    private static void ClearSpriteArea(int x, int rows, int columns)
+    {
+        string blank = new(' ', columns);
+        for (int row = -1; row <= rows; row++)
+        {
+            int y = 2 + row;
+            if (y < 0 || y >= Console.BufferHeight) continue;
+            Console.SetCursorPosition(x, y);
+            Console.Write(blank);
+            Console.Write("\x1b[0m");
+        }
+    }
+
+    private static void DrawTypeSprite(int centerX, int centerY, string type, string color, int width, int height,
+        HashSet<(int X, int Y)> drawnCells)
+    {
+        if (!EffectSprites.TryGetValue(type, out string[]? sprite)) return;
+        for (int row = 0; row < sprite.Length; row++)
+        for (int column = 0; column < sprite[row].Length; column++)
+        {
+            char pixel = sprite[row][column];
+            if (pixel is '.' or ' ') continue;
+            string pixelColor = pixel switch
+            {
+                '*' => "#FFFFFF",
+                '+' => Brighten(color, 0.72),
+                _ => Brighten(color, 0.38)
+            };
+            DrawEffectAt(centerX + column - 3, centerY + row - 3, "■", pixelColor, width, height,
+                drawnCells, bold: true);
+        }
+    }
+
+    private static void DrawTypeTrail(int x, int y, string type, int direction, string color, int width, int height,
+        HashSet<(int X, int Y)> drawnCells)
+    {
+        (int X, int Y)[] particles = type switch
+        {
+            "불꽃" => [(-5, 0), (-4, -1), (-6, 1)],
+            "물" => [(-5, -1), (-5, 1), (-7, 0)],
+            "전기" => [(-4, -1), (-5, 1), (-7, -1)],
+            "풀" => [(-5, -1), (-5, 1), (-7, 0)],
+            "얼음" => [(-5, 0), (-7, -1), (-7, 1)],
+            "독" => [(-5, -1), (-6, 1), (-8, 0)],
+            "비행" => [(-5, -1), (-5, 1), (-8, 0)],
+            "고스트" or "에스퍼" => [(-6, -1), (-7, 1)],
+            "땅" or "바위" => [(-5, 1), (-7, 1)],
+            "드래곤" => [(-5, 0), (-7, -1), (-7, 1)],
+            "강철" => [(-5, 0), (-7, 0)],
+            _ => [(-5, 0), (-7, 0)]
+        };
+
+        foreach (var particle in particles)
+            DrawEffectAt(x + particle.X * direction, y + particle.Y, "■", color, width, height, drawnCells,
+                bold: particle.X == -5);
+    }
+
+    private static int TypeMotionOffset(string type, double progress)
+    {
+        int frame = (int)(progress * 12);
+        return type switch
+        {
+            "전기" => frame % 2 == 0 ? -1 : 1,
+            "불꽃" => frame % 3 == 0 ? -1 : 0,
+            "물" => (int)Math.Round(Math.Sin(progress * Math.PI * 4)),
+            "풀" or "비행" => (int)Math.Round(-Math.Sin(progress * Math.PI)),
+            "벌레" => frame % 3 == 0 ? 1 : frame % 3 == 1 ? -1 : 0,
+            "땅" or "바위" => progress > 0.5 ? 1 : 0,
+            "얼음" => frame % 4 == 0 ? -1 : 0,
+            "고스트" or "에스퍼" => (int)Math.Round(Math.Sin(progress * Math.PI * 2)),
+            _ => 0
+        };
+    }
+
+    private static string Brighten(string color, double strength)
+    {
+        if (color.Length != 7 || color[0] != '#' ||
+            !uint.TryParse(color.AsSpan(1), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out uint rgb))
+            return color;
+        int red = (int)(rgb >> 16), green = (int)((rgb >> 8) & 255), blue = (int)(rgb & 255);
+        red += (int)((255 - red) * strength);
+        green += (int)((255 - green) * strength);
+        blue += (int)((255 - blue) * strength);
+        return $"#{red:X2}{green:X2}{blue:X2}";
+    }
+
+    private static void DrawEffectAt(int x, int y, string glyph, string color, int width, int height,
+        HashSet<(int X, int Y)> drawnCells, bool bold = false)
+    {
+        if (x < 0 || x >= width - 1 || y < 0 || y >= height) return;
+        if (color.Length != 7 || color[0] != '#' ||
+            !uint.TryParse(color.AsSpan(1), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out uint rgb))
+            return;
+        int red = (int)(rgb >> 16), green = (int)((rgb >> 8) & 255), blue = (int)(rgb & 255);
+        red = Math.Min(255, red * 3 / 5 + 102);
+        green = Math.Min(255, green * 3 / 5 + 102);
+        blue = Math.Min(255, blue * 3 / 5 + 102);
+        Console.SetCursorPosition(x, y);
+        Console.Write($"\x1b[{(bold ? "1;" : "")}38;2;{red};{green};{blue}m{glyph}\x1b[0m");
+        drawnCells.Add((x, y));
     }
 
     private static void DrawResult(string result, string? notification)
