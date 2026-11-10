@@ -29,6 +29,9 @@ abstract class ClientState
         return nextState;
     }
 
+    // 제한시간이 있는 화면은 남은 시간 표시만 고쳐 쓴다. (TimerTick 이벤트마다 호출)
+    public virtual void UpdateTimer() { }
+
     public virtual void ShowMenu()
     {
         Console.Clear();

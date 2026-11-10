@@ -2,6 +2,12 @@ sealed class LobbyState : ClientState
 {
     public override bool HandleCommand(ClientSession session, RoomManager rooms, string text)
     {
+        if (text == "ROOM_LIST")
+        {
+            rooms.SendRoomList(session);
+            return true;
+        }
+
         if (!int.TryParse(text, out int command))
         {
             session.QueueMessage("ERROR 숫자 명령을 입력하세요.");

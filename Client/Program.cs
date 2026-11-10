@@ -1,5 +1,4 @@
-﻿using System.Net;
-using System.Net.Sockets;
+﻿using System.Net.Sockets;
 using System.Text;
 using System.Threading.Channels;
 
@@ -10,9 +9,11 @@ class Program
     static async Task Main(string[] args)
     {
         // 서버를 같은 PC에서 실행하면 기본값(루프백)을 사용하고,
-        // 다른 PC의 서버라면 첫 번째 인자로 서버의 IPv4 주소를 전달한다.
+        // 다른 PC의 서버라면 첫 번째 인자로 서버의 IPv4 주소를 전달한다
+=======
         string host = args.Length > 0 ? args[0] : "127.0.0.1";
-        int port = 5000;
+        int port = 5050;
+
         if (args.Length > 1 &&
             (!int.TryParse(args[1], out port) || port is < 1 or > 65535))
         {
@@ -20,10 +21,13 @@ class Program
             return;
         }
 
-        // 1. 서버에 접속
-        Socket client = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+
+        using Socket client = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+
         try
         {
+            // 1. 서버에 접속 (IP 주소 또는 호스트 이름)
+
             client.Connect(host, port);
             using ISoundManager sound = SoundManager.Initialize();
             Console.WriteLine($"서버 접속 완료: {host}:{port}");
@@ -46,6 +50,7 @@ class Program
             Task receiving = ReceiveMessagesAsync(reader, events.Writer, stopping.Token);
             Task readingInput = ReadInputEventsAsync(events.Writer, stopping.Token);
             Task updatingAudio = WriteAudioUpdatesAsync(events.Writer, stopping.Token);
+            Task updatingTimer = WriteTimerTicksAsync(events.Writer, stopping.Token);
             try
             {
                 if (await ProcessEventsAsync(events.Reader, writer, stopping.Token))
@@ -63,6 +68,7 @@ class Program
                 await receiving;
                 await readingInput;
                 await updatingAudio;
+                await updatingTimer;
                 events.Writer.TryComplete();
             }
         }
@@ -76,7 +82,7 @@ class Program
         ChannelReader<ClientEvent> events, StreamWriter writer, CancellationToken cancellationToken)
     {
         ISoundManager sound = SoundManager.Instance;
-        ClientState state = new LobbyState();
+        ClientState state = new NicknameState();
         if (state.BgmPath is string initialBgm)
             sound.PlayBgm(initialBgm);
         state.ShowMenu();
@@ -88,6 +94,10 @@ class Program
                 case AudioUpdate:
                     sound.Update();
                     state.OnFrame();
+                    continue;
+                case TimerTick:
+                    // 화면 전체를 다시 그리지 않고 남은 시간 표시만 고친다. 입력 중인 글자는 그대로 둔다.
+                    state.UpdateTimer();
                     continue;
                 case UserInput input:
                     if (input.Text == null ||
@@ -134,6 +144,23 @@ class Program
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             // 종료 시 오디오 업데이트 이벤트 생성도 중단한다.
+        }
+    }
+
+    // 제한시간은 서버가 매초 보내지 않으므로 클라이언트가 스스로 센다. 초가 바뀔 때만 화면을 고친다.
+    private static async Task WriteTimerTicksAsync(
+        ChannelWriter<ClientEvent> events, CancellationToken cancellationToken)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(250));
+        var tick = new TimerTick();
+        try
+        {
+            while (await timer.WaitForNextTickAsync(cancellationToken))
+                await events.WriteAsync(tick, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // 종료 시 제한시간 이벤트 생성도 중단한다.
         }
     }
 

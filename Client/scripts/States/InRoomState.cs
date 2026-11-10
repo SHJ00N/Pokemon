@@ -3,15 +3,15 @@ namespace Client;
 sealed class InRoomState : ClientState
 {
     private readonly int roomId;
-    private readonly string hostAddress;
-    private sealed record RoomPlayer(string Address, bool IsReady);
-    private RoomPlayer[] players;
+    private readonly bool isHost;       // 내가 방장인지. 플레이어 목록에서 내 이름 옆에 (나)를 붙인다.
+    private sealed record RoomPlayer(string Name, bool IsReady);
+    private RoomPlayer[] players;       // 첫 번째가 방장
 
-    public InRoomState(int roomId, string hostAddress)
+    public InRoomState(int roomId, string hostName, bool isHost)
     {
         this.roomId = roomId;
-        this.hostAddress = hostAddress;
-        players = [new RoomPlayer(hostAddress, false)];
+        this.isHost = isHost;
+        players = [new RoomPlayer(hostName, false)];
     }
 
     protected override string Menu
@@ -20,8 +20,11 @@ sealed class InRoomState : ClientState
         {
             RoomPlayer[] currentPlayers = players;
             string playerList = string.Join(Environment.NewLine, currentPlayers.Select((player, index) =>
-                $"{(index == 0 ? "호스트" : "참여자")}: {player.Address} - {(player.IsReady ? "준비 완료" : "준비 안 됨")}"));
-            return $"\n[{roomId}] 호스트({hostAddress})의 게임 룸\n\n현재 플레이어\n{playerList}\n\n1. 준비 2. 나가기";
+                $"  {(index == 0 ? "방장" : "참여자")}  {player.Name}{((index == 0) == isHost ? " (나)" : "")}" +
+                $" - {(player.IsReady ? "준비 완료" : "준비 안 됨")}"));
+            if (currentPlayers.Length == 1)
+                playerList += $"{Environment.NewLine}  참여자  (상대방을 기다리는 중)";
+            return $"\n[{roomId}] {currentPlayers[0].Name}의 방\n\n현재 플레이어\n{playerList}\n\n1. 준비 2. 나가기";
         }
     }
 
@@ -69,7 +72,8 @@ sealed class InRoomState : ClientState
                 SetServerMessage("상대방이 퇴장했습니다. 새 상대방을 기다립니다.");
                 return this;
             case "ROOM_CLOSED":
-                return new LobbyState(); // 방장 종료 시 룸에서 강제 퇴장
+                SetServerMessage("방장이 나가서 방이 닫혔습니다.");
+                return ChangeState(new LobbyState()); // 방장 종료 시 룸에서 강제 퇴장
             default:
                 return base.HandleServerMessage(message);
         }

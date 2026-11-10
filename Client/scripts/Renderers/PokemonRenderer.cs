@@ -7,9 +7,27 @@ static class PokemonRenderer
 {
     private static readonly Regex AnsiCode = new(@"\x1B\[[0-?]*[ -/]*[@-~]", RegexOptions.Compiled);
 
-    public static string[] Load(int pokemonId, int maxRows, int maxColumns, bool flip)
+    // 그림이 없는 포켓몬(899번 이후 등)에 쓰는 물음표 그림
+    private static readonly string[] Placeholder =
+    [
+        "  ??????  ",
+        " ??    ?? ",
+        "      ??  ",
+        "     ??   ",
+        "    ??    ",
+        "          ",
+        "    ??    ",
+    ];
+
+    // 폼 번호의 그림 → 같은 종(전국도감 번호)의 그림 → 물음표 순으로 찾는다.
+    // 리전폼·메가진화 등 다른 폼은 아직 그림이 없어 기본 폼 그림을 쓴다.
+    public static string[] Load(int pokemonId, int speciesId, int maxRows, int maxColumns, bool flip)
     {
-        string path = Path.Combine(AppContext.BaseDirectory, "resources", "pokemon_scripts", $"{pokemonId:D4}.txt");
+        string? path = new[] { pokemonId, speciesId }
+            .Select(id => Path.Combine(AppContext.BaseDirectory, "resources", "pokemon_scripts", $"{id:D4}.txt"))
+            .FirstOrDefault(File.Exists);
+        if (path == null)
+            return Placeholder.Take(maxRows).Select(line => line[..Math.Min(line.Length, maxColumns)]).ToArray();
         string[] source = File.ReadAllLines(path, Encoding.UTF8);
         int sourceRows = source.Length;
         while (sourceRows > 1 && string.IsNullOrWhiteSpace(AnsiCode.Replace(source[sourceRows - 1], "")))
