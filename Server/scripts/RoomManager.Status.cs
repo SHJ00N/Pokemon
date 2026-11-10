@@ -67,6 +67,7 @@ partial class RoomManager
     private void UseDamagingMove(GameRoom room, BattleSide attacker, BattleSide defender, PokemonMoveInfo move)
     {
         BattlePokemon user = attacker.Current, target = defender.Current;
+        SendMoveEffect(room, attacker, move);
         var result = CalculateDamage(attacker, defender, move);
         LogPokemon(room, attacker, DescribeMove(user, move, result));
         if (!result.Supported || !result.Hit || result.Effectiveness == 0)
@@ -101,6 +102,14 @@ partial class RoomManager
             LogPokemon(room, defender, $"{target.Info.Name}의 얼음이 녹았다!");
         }
         ApplyStatusEffects(room, attacker, defender, move, null, announceFailure: false);
+    }
+
+    private void SendMoveEffect(GameRoom room, BattleSide attacker, PokemonMoveInfo move)
+    {
+        string color = data.TypesById[move.TypeId].ColorRgb;
+        string type = data.TypesById[move.TypeId].Name;
+        room.Host.QueueMessage($"BATTLE_EFFECT {color} {type} {(attacker == room.HostSide ? "SELF" : "OPPONENT")}");
+        room.Guest!.QueueMessage($"BATTLE_EFFECT {color} {type} {(attacker == room.GuestSide ? "SELF" : "OPPONENT")}");
     }
 
     // reflected: 매직코트로 되돌아온 기술 (기술 이름 기록은 이미 남겼다)

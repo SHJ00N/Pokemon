@@ -9,7 +9,9 @@ class Program
 {
     static async Task Main(string[] args)
     {
-        string host = args.Length > 0 ? args[0] : "192.168.56.1";
+        // 서버를 같은 PC에서 실행하면 기본값(루프백)을 사용하고,
+        // 다른 PC의 서버라면 첫 번째 인자로 서버의 IPv4 주소를 전달한다.
+        string host = args.Length > 0 ? args[0] : "127.0.0.1";
         int port = 5000;
         if (args.Length > 1 &&
             (!int.TryParse(args[1], out port) || port is < 1 or > 65535))
@@ -19,12 +21,10 @@ class Program
         }
 
         // 1. 서버에 접속
-        IPEndPoint ipep = new IPEndPoint(IPAddress.Parse("192.168.56.1"), 5000);
         Socket client = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-        client.Connect(ipep);
-
         try
         {
+            client.Connect(host, port);
             using ISoundManager sound = SoundManager.Initialize();
             Console.WriteLine($"서버 접속 완료: {host}:{port}");
 
@@ -87,6 +87,7 @@ class Program
             {
                 case AudioUpdate:
                     sound.Update();
+                    state.OnFrame();
                     continue;
                 case UserInput input:
                     if (input.Text == null ||

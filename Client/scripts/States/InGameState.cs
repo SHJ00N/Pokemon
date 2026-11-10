@@ -29,6 +29,20 @@ sealed class InGameState : ClientState
     private BattleMenu menuBeforeWaiting = BattleMenu.Main;  // 서버가 선택을 거절하면 돌아갈 단계
     private string? result;                                   // "WIN" 또는 "LOSE"
     private readonly List<string> battleLog = new();
+    private long nextFrameAt;
+    private long nextPlayerJumpAt;
+    private long nextOpponentJumpAt;
+    private long playerJumpStartedAt;
+    private long opponentJumpStartedAt;
+    private long flashPlayerStartedAt;
+    private long flashOpponentStartedAt;
+    private long effectStartedAt;
+    private string? effectColor;
+    private string? effectType;
+    private bool effectFromPlayer;
+    private bool hasScheduledJumps;
+    private bool frameWasAnimating;
+    private readonly Queue<(string Color, string Type, bool FromPlayer)> effectQueue = new();
 
     public override void ShowMenu() => InGameRenderer.Draw(
         catalog, pickedPokemon.Select(p => p.Name).ToList(), MoveTarget, selectedMoves, submitted,
@@ -61,10 +75,44 @@ sealed class InGameState : ClientState
         }
         if (message.StartsWith("BATTLE_STATE "))
         {
+            BattleView? previous = battle;
             if (battle == null)
                 Notification = "양쪽 플레이어의 포켓몬 선택이 완료되었습니다.";
             battle = JsonSerializer.Deserialize<BattleView>(message[13..])
                 ?? throw new InvalidDataException("전투 화면 정보를 해석할 수 없습니다.");
+            long now = Environment.TickCount64;
+            if (previous == null)
+            {
+                nextPlayerJumpAt = now + RandomJumpDelay();
+                nextOpponentJumpAt = now + RandomJumpDelay();
+                hasScheduledJumps = true;
+            }
+            if (previous != null)
+            {
+                if (previous.Team[previous.Active].Pokemon.PokemonId != battle.Team[battle.Active].Pokemon.PokemonId)
+                {
+                    playerJumpStartedAt = 0;
+                    nextPlayerJumpAt = now + RandomJumpDelay();
+                }
+                if (previous.Opponent.PokemonId != battle.Opponent.PokemonId)
+                {
+                    opponentJumpStartedAt = 0;
+                    nextOpponentJumpAt = now + RandomJumpDelay();
+                }
+                if (previous.Team[previous.Active].Pokemon.PokemonId == battle.Team[battle.Active].Pokemon.PokemonId &&
+                    battle.Team[battle.Active].Pokemon.CurrentHp < previous.Team[previous.Active].Pokemon.CurrentHp)
+                    flashPlayerStartedAt = now;
+                if (previous.Opponent.PokemonId == battle.Opponent.PokemonId &&
+                    battle.Opponent.CurrentHp < previous.Opponent.CurrentHp)
+                    flashOpponentStartedAt = now;
+            }
+            return this;
+        }
+        if (message.StartsWith("BATTLE_EFFECT "))
+        {
+            string[] effect = message.Split(' ', 4);
+            if (effect.Length == 4)
+                effectQueue.Enqueue((effect[1], effect[2], effect[3] == "SELF"));
             return this;
         }
         if (message.StartsWith("BATTLE_LOG "))
@@ -114,6 +162,76 @@ sealed class InGameState : ClientState
         if (message.StartsWith("ERROR ") && battle != null && menu == BattleMenu.Waiting && result == null)
             menu = menuBeforeWaiting;
         return base.HandleServerMessage(message);
+    }
+
+    public override void OnFrame()
+    {
+        if (battle == null || result != null) return;
+        long now = Environment.TickCount64;
+        if (!hasScheduledJumps)
+        {
+            nextPlayerJumpAt = now + RandomJumpDelay();
+            nextOpponentJumpAt = now + RandomJumpDelay();
+            hasScheduledJumps = true;
+        }
+        if (now >= nextPlayerJumpAt)
+        {
+            playerJumpStartedAt = now;
+            nextPlayerJumpAt = now + RandomJumpDelay();
+        }
+        if (now >= nextOpponentJumpAt)
+        {
+            opponentJumpStartedAt = now;
+            nextOpponentJumpAt = now + RandomJumpDelay();
+        }
+
+        bool playerJumping = IsJumping(playerJumpStartedAt, now);
+        bool opponentJumping = IsJumping(opponentJumpStartedAt, now);
+        bool effectPending = effectColor != null || effectQueue.Count > 0;
+        bool flashActive = IsHitFlashActive(flashPlayerStartedAt, now) ||
+            IsHitFlashActive(flashOpponentStartedAt, now);
+        bool animating = playerJumping || opponentJumping || effectPending || flashActive;
+        if (!animating && !frameWasAnimating) return;
+        if (now < nextFrameAt) return;
+        nextFrameAt = now + 80;
+        if (effectColor == null && effectQueue.TryDequeue(out var nextEffect))
+        {
+            effectColor = nextEffect.Color;
+            effectType = nextEffect.Type;
+            effectFromPlayer = nextEffect.FromPlayer;
+            effectStartedAt = now;
+        }
+        double progress = (now - effectStartedAt) / 500.0;
+        bool showEffect = effectColor != null && progress <= 1;
+        if (!showEffect)
+        {
+            effectColor = null;
+            effectType = null;
+        }
+        int playerOffset = JumpOffset(playerJumpStartedAt, now);
+        int opponentOffset = JumpOffset(opponentJumpStartedAt, now);
+        InGameRenderer.DrawBattleFrame(battle, playerOffset, opponentOffset,
+            IsHitFlashOn(flashPlayerStartedAt, now), IsHitFlashOn(flashOpponentStartedAt, now),
+            showEffect ? effectColor : null, showEffect ? effectType : null,
+            effectFromPlayer, progress);
+        frameWasAnimating = animating;
+    }
+
+    private static bool IsHitFlashActive(long startedAt, long now) =>
+        startedAt > 0 && now - startedAt < 320;
+
+    private static bool IsHitFlashOn(long startedAt, long now) =>
+        IsHitFlashActive(startedAt, now) && (now - startedAt) / 80 % 2 == 0;
+
+    private static long RandomJumpDelay() => Random.Shared.Next(1_000, 30_001);
+
+    private static bool IsJumping(long startedAt, long now) => startedAt > 0 && now - startedAt < 360;
+
+    private static int JumpOffset(long startedAt, long now)
+    {
+        if (!IsJumping(startedAt, now)) return 0;
+        long elapsed = now - startedAt;
+        return elapsed switch { < 100 => 0, < 260 => -1, _ => 0 };
     }
 
     public override async Task<bool> HandleCommand(
