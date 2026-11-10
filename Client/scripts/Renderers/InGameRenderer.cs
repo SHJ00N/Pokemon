@@ -22,7 +22,8 @@ static class InGameRenderer
         if (timerColumn is not int column)
             return;
         string moveRight = column > 0 ? $"\x1b[{column}C" : "";
-        Console.Write($"\x1b7\r{moveRight}{FormatTimer(seconds)}\x1b8");
+        // "\x1b7"은 C#에서 \x가 16진수를 최대 4자리까지 읽어 'Ʒ'(U+01B7) 한 글자가 된다. \u는 정확히 4자리만 읽는다.
+        Console.Write($"\u001b7\r{moveRight}{FormatTimer(seconds)}\u001b8");
     }
 
     // switchList: 교체 메뉴일 때 고를 수 있는 팀 번호(0부터). null이면 기술 목록을 표시한다.
