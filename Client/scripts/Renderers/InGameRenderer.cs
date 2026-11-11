@@ -6,31 +6,8 @@ namespace Client;
 static class InGameRenderer
 {
 
-    private static readonly HashSet<(int X, int Y)> previousEffectCells = new();
-    private static int drawnPlayerOffset, drawnOpponentOffset;
-    private static bool drawnPlayerFlash, drawnOpponentFlash, battleBaseInitialized;
-
-    private static readonly Dictionary<string, string[]> EffectSprites = new()
-    {
-        ["노말"] = ["..###..", ".##.##.", "###*###", "###.###", ".#####.", "..###..", "...#..."],
-        ["불꽃"] = ["...*...", "..*#*..", ".*###+.", ".#####.", ".#####.", "..###..", "...#..."],
-        ["물"] = ["...#...", "..###..", ".#####.", "#######", "#######", ".#####.", "..###.."],
-        ["전기"] = ["....#..", "...##..", "..##...", "#######", "..##...", ".##....", "##....."],
-        ["풀"] = ["...##..", "..###*.", ".#####.", "#####..", ".####..", "..##...", "..#...."],
-        ["얼음"] = ["...#...", ".#.+.#.", "..###..", "###+###", "..###..", ".#.+.#.", "...#..."],
-        ["격투"] = ["...##..", "..####.", ".#####.", "#######", ".#####.", "..###..", "..#...."],
-        ["독"] = [".*...*.", "..###..", ".#####.", "##.#.##", "#######", "..#.#..", "......."],
-        ["땅"] = ["...#...", "..###..", "#######", ".##.##.", "##...##", ".#...#.", "......."],
-        ["비행"] = ["#.....#", "##...##", "###.###", "#######", ".#####.", "..###..", "...#..."],
-        ["에스퍼"] = ["..###..", ".#...#.", "#..*..#", "#.###.#", "#..*..#", ".#...#.", "..###.."],
-        ["벌레"] = [".#...#.", "##.#.##", ".#####.", "..###..", ".#####.", "##.#.##", ".#...#."],
-        ["바위"] = ["..###..", ".#####.", "#######", "###+###", "#######", ".#####.", "..###.."],
-        ["고스트"] = ["..###..", ".#####.", "###+###", "###.###", ".#####.", "..#.#..", ".#...#."],
-        ["드래곤"] = ["..##...", ".####..", "#######", "#######", ".####..", "..###*.", "..##..."],
-        ["악"] = ["#..#..#", "#.##.#.", ".#####.", "..###..", "...#...", "..#.#..", ".#...#."],
-        ["강철"] = ["...##..", ".####..", "######.", "###*###", ".######", "..####.", "...##.."],
-        ["페어리"] = ["...#...", "..###..", "#######", ".#####.", "..###..", ".#...#.", "*.....*"]
-    };
+    private static readonly BattleSpriteBuffer spriteBuffer = new();
+    private static (int Width, int Height, int StatusY)? battleLayout;
 
     // 목록에 표시하는 이름. 같은 종의 다른 폼과 구분해야 하면 폼 이름을 붙인다. 예: 라이츄 (알로라의 모습)
     public static string DisplayName(PokemonCatalogEntry entry) =>
@@ -41,7 +18,7 @@ static class InGameRenderer
 
     // 남은 시간 표시. 매초 같은 폭으로 고쳐 쓸 수 있게 폭을 고정한다.
     private static string FormatTimer(int seconds) =>
-        TextRenderer.FitToWidth(seconds > 0 ? $"[남은 시간 {seconds,2}초]" : "[시간 초과]", 16) + " ";
+        TextRenderer.FitToWidth(seconds > 0 ? $"[남은 시간 {seconds,3}초]" : "[시간 초과]", 17) + " ";
 
     // 화면 전체를 다시 그리지 않고 입력 줄의 남은 시간만 고쳐 쓴다.
     // 커서 위치를 저장(ESC 7)하고 줄 맨 앞으로 가서 쓴 뒤 되돌리므로(ESC 8), 입력 중인 글자는 그대로 남는다.
@@ -62,16 +39,18 @@ static class InGameRenderer
         BattleView? battle, string? notification, IReadOnlyList<string> battleLog, string prompt,
         IReadOnlyList<int>? switchList, bool showBack, string? result, int? timerSeconds)
     {
-        TextRenderer.Clear();
         timerColumn = null;
+        if (battle != null && result == null)
+        {
+            DrawBattle(battle, notification, battleLog, prompt, switchList, showBack, timerSeconds);
+            return;
+        }
+        TextRenderer.Clear();
+        battleLayout = null;
+        spriteBuffer.Reset();
         if (result != null)
         {
             DrawResult(result, notification);
-            return;
-        }
-        if (battle != null)
-        {
-            DrawBattle(battle, notification, battleLog, prompt, switchList, showBack, timerSeconds);
             return;
         }
 
@@ -96,6 +75,7 @@ static class InGameRenderer
             DrawMoveCatalog(selectedPokemon, selectedPokemon.LearnableMoveIds.Select(id => movesById[id]));
             TextRenderer.WriteLine("선택한 팀: " + string.Join(" / ", teamNames));
             TextRenderer.WriteLine("선택한 기술: " + string.Join(" / ", selectedMoves.Select(id => movesById[id].Name)));
+            TextRenderer.WriteLine("0. 기술 4개 무작위 선택 후 확정 (현재 선택한 기술을 대체)");
             // 팀에 같은 종이 없으므로 이름으로 몇 번째인지 찾는다.
             int order = teamNames.ToList().IndexOf(DisplayName(selectedPokemon)) + 1;
             TextRenderer.Write($"{order}번째 포켓몬 ");
@@ -152,6 +132,9 @@ static class InGameRenderer
         int height = Console.BufferHeight;
         if (width < 76 || height < 27)
         {
+            TextRenderer.Clear();
+            battleLayout = null;
+            spriteBuffer.Reset();
             TextRenderer.WriteLine("두 포켓몬을 표시하려면 76열 × 27행 이상의 터미널이 필요합니다.");
             return;
         }
@@ -162,15 +145,21 @@ static class InGameRenderer
         int maxRows = height - 19;
         string[] player = PokemonRenderer.Load(active.Pokemon.PokemonId, active.Pokemon.SpeciesId, maxRows, columns, flip: true);
         string[] opponent = PokemonRenderer.Load(battle.Opponent.PokemonId, battle.Opponent.SpeciesId, maxRows, columns, flip: false);
-        TextRenderer.At(2, 0, "내 포켓몬");
-        TextRenderer.At(rightX, 0, "상대 포켓몬");
-        PokemonRenderer.Draw(player, 2, 2);
-        PokemonRenderer.Draw(opponent, rightX, 2);
-        previousEffectCells.Clear();
-        drawnPlayerOffset = drawnOpponentOffset = 0;
-        drawnPlayerFlash = drawnOpponentFlash = false;
-        battleBaseInitialized = true;
         int statusY = Math.Max(player.Length, opponent.Length) + 3;
+        var layout = (width, height, statusY);
+        if (battleLayout != layout)
+        {
+            TextRenderer.Clear();
+            spriteBuffer.Reset();
+            battleLayout = layout;
+            TextRenderer.At(2, 0, "내 포켓몬");
+            TextRenderer.At(rightX, 0, "상대 포켓몬");
+        }
+        // HP·메뉴 갱신이 포켓몬 그림 영역을 지우지 않게 한다.
+        var clearInformation = new System.Text.StringBuilder("\x1b[0m");
+        for (int row = statusY; row < height; row++)
+            clearInformation.Append($"\x1b[{row + 1};1H\x1b[2K");
+        Console.Write(clearInformation.ToString());
         DrawStatus(active.Pokemon, 2, statusY, columns);
         DrawStatus(battle.Opponent, rightX, statusY, columns);
 
@@ -212,10 +201,8 @@ static class InGameRenderer
     // Animation frames update only the sprite area, leaving menus and logs steady.
     public static void DrawBattleFrame(BattleView battle, int playerJumpOffset, int opponentJumpOffset,
         bool flashPlayer, bool flashOpponent,
-        string? effectColor, string? effectType, bool effectFromPlayer, double effectProgress)
+        TypeView? effectType, bool effectFromPlayer, double effectProgress)
     {
-        int cursorX = Console.CursorLeft;
-        int cursorY = Console.CursorTop;
         int width = Console.BufferWidth;
         int height = Console.BufferHeight;
         if (width < 76 || height < 27) return;
@@ -223,127 +210,58 @@ static class InGameRenderer
         int rightX = width / 2 + 1;
         int columns = width / 2 - 4;
         int maxRows = height - 19;
-        string[] player = PokemonRenderer.Load(battle.Team[battle.Active].Pokemon.PokemonId, maxRows, columns, flip: true);
-        string[] opponent = PokemonRenderer.Load(battle.Opponent.PokemonId, maxRows, columns, flip: false);
+        string[] player = PokemonRenderer.Load(battle.Team[battle.Active].Pokemon.PokemonId, battle.Team[battle.Active].Pokemon.SpeciesId, maxRows, columns, flip: true);
+        string[] opponent = PokemonRenderer.Load(battle.Opponent.PokemonId, battle.Opponent.SpeciesId, maxRows, columns, flip: false);
 
-        try
+        spriteBuffer.BeginFrame();
+        spriteBuffer.AddImage(player, 2, 2 + playerJumpOffset, flashPlayer);
+        spriteBuffer.AddImage(opponent, rightX, 2 + opponentJumpOffset, flashOpponent);
+        if (effectType != null && effectProgress is >= 0 and <= 1)
         {
-            bool redrawSprites = !battleBaseInitialized || playerJumpOffset != drawnPlayerOffset ||
-                opponentJumpOffset != drawnOpponentOffset || flashPlayer != drawnPlayerFlash ||
-                flashOpponent != drawnOpponentFlash;
-            if (redrawSprites)
+            string effectColor = effectType.ColorRgb;
+            int effectBottom = 2 + Math.Max(player.Length, opponent.Length);
+            var (_, playerMax) = PokemonRenderer.GetHorizontalBounds(player);
+            var (opponentMin, _) = PokemonRenderer.GetHorizontalBounds(opponent);
+            int playerFront = 2 + playerMax;
+            int opponentFront = rightX + opponentMin;
+            int leftStart = playerFront - 3, leftEnd = opponentFront - 3;
+            if (leftEnd < leftStart)
+                (leftStart, leftEnd) = (playerFront, opponentFront);
+            int start = effectFromPlayer ? leftStart : leftEnd;
+            int end = effectFromPlayer ? leftEnd : leftStart;
+            double travelProgress = Math.Clamp(effectProgress / 0.78, 0, 1);
+            int x = start + (int)Math.Round((end - start) * travelProgress);
+            int targetOffset = effectFromPlayer ? opponentJumpOffset : playerJumpOffset;
+            int y = Math.Max(4, 2 + Math.Max(player.Length, opponent.Length) / 2 + targetOffset);
+            y += TypeMotionOffset(effectType.Name, effectProgress);
+            if (x >= 0 && x < width - 1 && y < height)
             {
-                previousEffectCells.Clear();
-                ClearSpriteArea(2, player.Length, columns);
-                ClearSpriteArea(rightX, opponent.Length, columns);
-                PokemonRenderer.Draw(player, 2, 2 + playerJumpOffset, flashPlayer);
-                PokemonRenderer.Draw(opponent, rightX, 2 + opponentJumpOffset, flashOpponent);
-                drawnPlayerOffset = playerJumpOffset;
-                drawnOpponentOffset = opponentJumpOffset;
-                drawnPlayerFlash = flashPlayer;
-                drawnOpponentFlash = flashOpponent;
-                battleBaseInitialized = true;
-            }
-            else
-                RestorePreviousEffectCells(player, opponent, rightX, columns);
-
-            if (effectColor != null && effectType != null && effectProgress is >= 0 and <= 1)
-            {
-                var (_, playerMax) = PokemonRenderer.GetHorizontalBounds(player);
-                var (opponentMin, _) = PokemonRenderer.GetHorizontalBounds(opponent);
-                int playerFront = 2 + playerMax;
-                int opponentFront = rightX + opponentMin;
-                int leftStart = playerFront - 3, leftEnd = opponentFront - 3;
-                if (leftEnd < leftStart)
-                    (leftStart, leftEnd) = (playerFront, opponentFront);
-                int start = effectFromPlayer ? leftStart : leftEnd;
-                int end = effectFromPlayer ? leftEnd : leftStart;
-                double travelProgress = Math.Clamp(effectProgress / 0.78, 0, 1);
-                int x = start + (int)Math.Round((end - start) * travelProgress);
-                int targetOffset = effectFromPlayer ? opponentJumpOffset : playerJumpOffset;
-                int y = Math.Max(4, 2 + Math.Max(player.Length, opponent.Length) / 2 + targetOffset);
-                y += TypeMotionOffset(effectType, effectProgress);
-                if (x >= 0 && x < width - 1 && y < height)
+                if (effectProgress < 0.78)
                 {
-                    if (effectProgress < 0.78)
+                    int direction = effectFromPlayer ? 1 : -1;
+                    DrawTypeTrail(x, y, effectType.Name, direction, effectColor, width, effectBottom, spriteBuffer);
+                    AttackImageRenderer.Draw(effectType.TypeId, x, y, !effectFromPlayer,
+                        width, 2, effectBottom, spriteBuffer);
+                }
+                else
+                {
+                    AttackImageRenderer.Draw(effectType.TypeId, end, y, !effectFromPlayer,
+                        width, 2, effectBottom, spriteBuffer);
+                    int incoming = effectFromPlayer ? -1 : 1;
+                    foreach (var (offsetX, offsetY) in new[]
                     {
-                        int direction = effectFromPlayer ? 1 : -1;
-                        DrawTypeTrail(x, y, effectType, direction, effectColor, width, height, previousEffectCells);
-                        DrawTypeSprite(x, y, effectType, effectColor, width, height, previousEffectCells);
-                    }
-                    else
-                    {
-                        DrawTypeSprite(end, y, effectType, effectColor, width, height, previousEffectCells);
-                        int incoming = effectFromPlayer ? -1 : 1;
-                        foreach (var (offsetX, offsetY) in new[]
-                        {
-                            (-5, 0), (-4, -4), (-4, 4), (-2, -5), (-2, 5), (0, -5), (0, 5)
-                        })
-                            DrawEffectAt(end + offsetX * incoming, y + offsetY, "■", effectColor, width, height,
-                                previousEffectCells, bold: true);
-                    }
+                        (-5, 0), (-4, -4), (-4, 4), (-2, -5), (-2, 5), (0, -5), (0, 5)
+                    })
+                        DrawEffectAt(end + offsetX * incoming, y + offsetY, "■", effectColor, width, effectBottom,
+                            spriteBuffer, bold: true);
                 }
             }
         }
-        finally
-        {
-            if (cursorX < Console.BufferWidth && cursorY < Console.BufferHeight)
-                Console.SetCursorPosition(cursorX, cursorY);
-        }
-    }
-
-    private static void RestorePreviousEffectCells(string[] player, string[] opponent, int rightX, int columns)
-    {
-        foreach (var (x, y) in previousEffectCells)
-        {
-            if (x >= 2 && x < 2 + columns)
-                PokemonRenderer.DrawCell(player, x, y, y - 2 - drawnPlayerOffset, x - 2, drawnPlayerFlash);
-            else if (x >= rightX && x < rightX + columns)
-                PokemonRenderer.DrawCell(opponent, x, y, y - 2 - drawnOpponentOffset, x - rightX, drawnOpponentFlash);
-            else
-            {
-                Console.SetCursorPosition(x, y);
-                Console.Write(" \x1b[0m");
-            }
-        }
-        previousEffectCells.Clear();
-    }
-
-    private static void ClearSpriteArea(int x, int rows, int columns)
-    {
-        string blank = new(' ', columns);
-        for (int row = -1; row <= rows; row++)
-        {
-            int y = 2 + row;
-            if (y < 0 || y >= Console.BufferHeight) continue;
-            Console.SetCursorPosition(x, y);
-            Console.Write(blank);
-            Console.Write("\x1b[0m");
-        }
-    }
-
-    private static void DrawTypeSprite(int centerX, int centerY, string type, string color, int width, int height,
-        HashSet<(int X, int Y)> drawnCells)
-    {
-        if (!EffectSprites.TryGetValue(type, out string[]? sprite)) return;
-        for (int row = 0; row < sprite.Length; row++)
-        for (int column = 0; column < sprite[row].Length; column++)
-        {
-            char pixel = sprite[row][column];
-            if (pixel is '.' or ' ') continue;
-            string pixelColor = pixel switch
-            {
-                '*' => "#FFFFFF",
-                '+' => Brighten(color, 0.72),
-                _ => Brighten(color, 0.38)
-            };
-            DrawEffectAt(centerX + column - 3, centerY + row - 3, "■", pixelColor, width, height,
-                drawnCells, bold: true);
-        }
+        spriteBuffer.Flush(width, height);
     }
 
     private static void DrawTypeTrail(int x, int y, string type, int direction, string color, int width, int height,
-        HashSet<(int X, int Y)> drawnCells)
+        BattleSpriteBuffer drawnCells)
     {
         (int X, int Y)[] particles = type switch
         {
@@ -383,22 +301,10 @@ static class InGameRenderer
         };
     }
 
-    private static string Brighten(string color, double strength)
-    {
-        if (color.Length != 7 || color[0] != '#' ||
-            !uint.TryParse(color.AsSpan(1), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out uint rgb))
-            return color;
-        int red = (int)(rgb >> 16), green = (int)((rgb >> 8) & 255), blue = (int)(rgb & 255);
-        red += (int)((255 - red) * strength);
-        green += (int)((255 - green) * strength);
-        blue += (int)((255 - blue) * strength);
-        return $"#{red:X2}{green:X2}{blue:X2}";
-    }
-
     private static void DrawEffectAt(int x, int y, string glyph, string color, int width, int height,
-        HashSet<(int X, int Y)> drawnCells, bool bold = false)
+        BattleSpriteBuffer drawnCells, bool bold = false)
     {
-        if (x < 0 || x >= width - 1 || y < 0 || y >= height) return;
+        if (x < 0 || x >= width - 1 || y < 2 || y >= height) return;
         if (color.Length != 7 || color[0] != '#' ||
             !uint.TryParse(color.AsSpan(1), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out uint rgb))
             return;
@@ -406,9 +312,7 @@ static class InGameRenderer
         red = Math.Min(255, red * 3 / 5 + 102);
         green = Math.Min(255, green * 3 / 5 + 102);
         blue = Math.Min(255, blue * 3 / 5 + 102);
-        Console.SetCursorPosition(x, y);
-        Console.Write($"\x1b[{(bold ? "1;" : "")}38;2;{red};{green};{blue}m{glyph}\x1b[0m");
-        drawnCells.Add((x, y));
+        drawnCells.SetPixel(x, y, $"\x1b[{(bold ? "1;" : "")}38;2;{red};{green};{blue}m", glyph[0]);
     }
 
     private static void DrawResult(string result, string? notification)

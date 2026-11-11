@@ -52,7 +52,7 @@ static class PokemonRenderer
         for (int row = 0; row < lines.Length; row++)
         {
             Console.SetCursorPosition(x, y + row);
-            Console.Write(flash ? Flash(lines[row]) : lines[row]);
+            Console.Write(flash ? Blank(lines[row]) : lines[row]);
             Console.Write("\x1b[0m");
         }
     }
@@ -60,6 +60,12 @@ static class PokemonRenderer
     public static void DrawCell(string[] lines, int x, int y, int row, int column, bool flash = false)
     {
         Console.SetCursorPosition(x, y);
+        // 숨김 프레임에서는 공격 이미지 아래의 포켓몬 픽셀도 다시 나타나지 않게 한다.
+        if (flash)
+        {
+            Console.Write("\x1b[0m ");
+            return;
+        }
         if (row < 0 || row >= lines.Length)
         {
             Console.Write(' ');
@@ -74,7 +80,6 @@ static class PokemonRenderer
         }
         var cell = cells[column];
         Console.Write(cell.Ansi);
-        if (flash) Console.Write("\x1b[7m");
         Console.Write(cell.Character);
         Console.Write("\x1b[0m");
     }
@@ -95,9 +100,10 @@ static class PokemonRenderer
         return maxX < 0 ? (0, 0) : (minX, maxX);
     }
 
-    private static string Flash(string line) => AnsiCode.Replace(line, match => match.Value + "\x1b[7m");
+    // ANSI 코드를 제외한 실제 글자 수만큼 공백을 써서 포켓몬을 지운다.
+    private static string Blank(string line) => "\x1b[0m" + new string(' ', Parse(line).Count);
 
-    private static List<(string Ansi, char Character)> Parse(string line)
+    internal static List<(string Ansi, char Character)> Parse(string line)
     {
         var cells = new List<(string, char)>();
         string ansi = "";

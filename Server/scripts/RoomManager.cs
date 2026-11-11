@@ -400,6 +400,7 @@ partial class RoomManager
             string next = side.Current.Info.Name;
             Log(room, side, $"돌아와, {previous}! 가라, {next}!",
                 $"상대가 {WithJosa(previous, "을", "를")} 거두고 {WithJosa(next, "을", "를")} 내보냈다!");
+            SendBattleState(room);
         }
 
         // 우선도가 높은 기술 → 스피드가 빠른 포켓몬(트릭룸이면 느린 포켓몬) → 같으면 무작위
@@ -411,7 +412,11 @@ partial class RoomManager
             .ToList();
 
         for (int index = 0; index < attackers.Count; index++)
+        {
             ExecuteMove(room, attackers[index], GetOther(room, attackers[index]), movesLast: index == attackers.Count - 1);
+            // 각 공격의 HP·상태·능력치 결과를 다음 공격 효과보다 먼저 보낸다.
+            SendBattleState(room);
+        }
 
         EndOfTurn(room);
 

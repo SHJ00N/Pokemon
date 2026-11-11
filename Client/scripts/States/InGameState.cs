@@ -31,30 +31,22 @@ sealed class InGameState : ClientState
     private string? result;                                   // "WIN", "LOSE" 또는 "DRAW"
     private readonly List<string> battleLog = new();
     private long nextFrameAt;
-    private long nextPlayerJumpAt;
-    private long nextOpponentJumpAt;
-    private long playerJumpStartedAt;
-    private long opponentJumpStartedAt;
-    private long flashPlayerStartedAt;
-    private long flashOpponentStartedAt;
-    private long effectStartedAt;
-    private string? effectColor;
-    private string? effectType;
-    private bool effectFromPlayer;
-    private bool hasScheduledJumps;
-    private bool frameWasAnimating;
-    private readonly Queue<(string Color, string Type, bool FromPlayer)> effectQueue = new();
+    private const int IdleCycleMilliseconds = 800;
+    private long idleStartedAt;
+    private readonly BattleAnimation animation = new();
+    private readonly Queue<(string Message, long ReceivedAt)> deferredBattleMessages = new();
 
     // 선택 제한시간 (서버 RoomManager.Timer.cs와 같은 값). 서버는 남은 시간을 보내지 않으므로
     // 안내(포켓몬 목록, CHOOSE_ACTION 등)를 받은 순간부터 직접 센다. 시간 초과 판정은 서버가 한다.
-    private const int TeamTimeLimitSeconds = 60, ActionTimeLimitSeconds = 60;
+    private const int TeamTimeLimitSeconds = 300, ActionTimeLimitSeconds = 60;
     private long? deadline;         // Environment.TickCount64 기준 마감 시각(ms). null이면 제한시간 없음
     private int? shownSeconds;      // 화면에 마지막으로 그린 남은 초
 
     private int? RemainingSeconds => deadline is long end && result == null
         ? (int)Math.Max(0, (end - Environment.TickCount64 + 999) / 1000) : null;
 
-    private void StartTimer(int seconds) => deadline = Environment.TickCount64 + seconds * 1000L;
+    private void StartTimer(int seconds, long? startedAt = null) =>
+        deadline = (startedAt ?? Environment.TickCount64) + seconds * 1000L;
 
     // 재도전하면 서버가 포켓몬 목록을 다시 보내지 않으므로 이전 상태의 목록을 넘겨받는다.
     public InGameState(PokemonCatalogResponse? catalog = null)
@@ -66,20 +58,35 @@ sealed class InGameState : ClientState
 
     public override void ShowMenu()
     {
+        if (battle != null && result == null && animation.IsBusy) return;
         shownSeconds = RemainingSeconds;
-        InGameRenderer.Draw(
-            catalog, pickedPokemon.Select(InGameRenderer.DisplayName).ToList(), MoveTarget, selectedMoves, submitted,
-            battle, Notification, battleLog, GetPrompt(),
-            menu is BattleMenu.Switch or BattleMenu.ForcedSwitch or BattleMenu.BatonPass ? GetSwitchCandidates() : null,
-            menu is BattleMenu.Fight or BattleMenu.Switch or BattleMenu.BatonPass, result, shownSeconds);
+        // 출력 스레드에는 이후 입력·서버 메시지로 바뀌지 않는 시점의 값만 전달한다.
+        var view = (Catalog: catalog, Names: pickedPokemon.Select(InGameRenderer.DisplayName).ToArray(),
+            Target: MoveTarget, Moves: selectedMoves.ToArray(), Submitted: submitted, Battle: battle,
+            Notice: Notification, Log: battleLog.ToArray(), Prompt: GetPrompt(),
+            Switches: menu is BattleMenu.Switch or BattleMenu.ForcedSwitch or BattleMenu.BatonPass ? GetSwitchCandidates() : null,
+            Back: menu is BattleMenu.Fight or BattleMenu.Switch or BattleMenu.BatonPass,
+            Result: result, Seconds: shownSeconds);
+        ConsoleRenderThreads.Information(() => InGameRenderer.Draw(
+            view.Catalog, view.Names, view.Target, view.Moves, view.Submitted, view.Battle, view.Notice,
+            view.Log, view.Prompt, view.Switches, view.Back, view.Result, view.Seconds));
+        if (view.Battle != null && view.Result == null)
+        {
+            int offset = IdleOffset(Environment.TickCount64);
+            int playerOffset = view.Battle.Team[view.Battle.Active].Pokemon.CurrentHp > 0 ? offset : 0;
+            int opponentOffset = view.Battle.Opponent.CurrentHp > 0 ? offset : 0;
+            ConsoleRenderThreads.Sprites(() => InGameRenderer.DrawBattleFrame(
+                view.Battle, playerOffset, opponentOffset, false, false, null, false, 0));
+        }
     }
 
     public override void UpdateTimer()
     {
+        if (animation.IsBusy) return;
         if (RemainingSeconds is int seconds && seconds != shownSeconds)
         {
             shownSeconds = seconds;
-            InGameRenderer.UpdateTimer(seconds);
+            ConsoleRenderThreads.Information(() => InGameRenderer.UpdateTimer(seconds));
         }
     }
 
@@ -100,6 +107,19 @@ sealed class InGameState : ClientState
 
     public override ClientState HandleServerMessage(string message)
     {
+        long receivedAt = Environment.TickCount64;
+        // 뒤따르는 HP·교체·승패를 먼저 표시하면 공격 연출이 중간에 사라지므로 순서대로 보관한다.
+        if (battle != null && (animation.IsBusy || deferredBattleMessages.Count > 0) &&
+            (message.StartsWith("BATTLE_") || message is "CHOOSE_ACTION" or "CHOOSE_SWITCH" or "WAIT_SWITCH" or "LOCKED"))
+        {
+            deferredBattleMessages.Enqueue((message, receivedAt));
+            return this;
+        }
+        return ApplyServerMessage(message, receivedAt);
+    }
+
+    private ClientState ApplyServerMessage(string message, long receivedAt)
+    {
         if (message.StartsWith("POKEMON_CATALOG "))
         {
             catalog = CatalogCodec.Decode(message[16..]);   // Base64 → Brotli 압축 풀기 → JSON
@@ -109,47 +129,21 @@ sealed class InGameState : ClientState
         }
         if (message.StartsWith("BATTLE_STATE "))
         {
-            BattleView? previous = battle;
             if (battle == null)
             {
                 Notification = "양쪽 플레이어의 포켓몬 선택이 완료되었습니다.";
                 deadline = null;    // 포켓몬 선택 제한시간 끝. 행동 선택 제한시간은 CHOOSE_ACTION부터 센다.
+                idleStartedAt = Environment.TickCount64;
             }
             battle = JsonSerializer.Deserialize<BattleView>(message[13..])
                 ?? throw new InvalidDataException("전투 화면 정보를 해석할 수 없습니다.");
-            long now = Environment.TickCount64;
-            if (previous == null)
-            {
-                nextPlayerJumpAt = now + RandomJumpDelay();
-                nextOpponentJumpAt = now + RandomJumpDelay();
-                hasScheduledJumps = true;
-            }
-            if (previous != null)
-            {
-                if (previous.Team[previous.Active].Pokemon.PokemonId != battle.Team[battle.Active].Pokemon.PokemonId)
-                {
-                    playerJumpStartedAt = 0;
-                    nextPlayerJumpAt = now + RandomJumpDelay();
-                }
-                if (previous.Opponent.PokemonId != battle.Opponent.PokemonId)
-                {
-                    opponentJumpStartedAt = 0;
-                    nextOpponentJumpAt = now + RandomJumpDelay();
-                }
-                if (previous.Team[previous.Active].Pokemon.PokemonId == battle.Team[battle.Active].Pokemon.PokemonId &&
-                    battle.Team[battle.Active].Pokemon.CurrentHp < previous.Team[previous.Active].Pokemon.CurrentHp)
-                    flashPlayerStartedAt = now;
-                if (previous.Opponent.PokemonId == battle.Opponent.PokemonId &&
-                    battle.Opponent.CurrentHp < previous.Opponent.CurrentHp)
-                    flashOpponentStartedAt = now;
-            }
             return this;
         }
         if (message.StartsWith("BATTLE_EFFECT "))
         {
-            string[] effect = message.Split(' ', 4);
-            if (effect.Length == 4)
-                effectQueue.Enqueue((effect[1], effect[2], effect[3] == "SELF"));
+            string[] effect = message.Split(' ', 5);
+            if (effect.Length == 5 && int.TryParse(effect[1], out int typeId))
+                animation.Enqueue(new TypeView(typeId, effect[3], effect[2]), effect[4] == "SELF");
             return this;
         }
         if (message.StartsWith("BATTLE_LOG "))
@@ -168,7 +162,7 @@ sealed class InGameState : ClientState
             if (message == "LOCKED")
                 Notification = "난동을 부리고 있어서 같은 기술을 계속 사용합니다.";
             // 내가 고르는 중이 아니면(WAIT_SWITCH, LOCKED) 상대가 고르는 데 남은 시간이다.
-            StartTimer(ActionTimeLimitSeconds);
+            StartTimer(ActionTimeLimitSeconds, receivedAt);
             return this;
         }
         if (message.StartsWith("BATTLE_END "))
@@ -241,75 +235,47 @@ sealed class InGameState : ClientState
     {
         if (battle == null || result != null) return;
         long now = Environment.TickCount64;
-        if (!hasScheduledJumps)
-        {
-            nextPlayerJumpAt = now + RandomJumpDelay();
-            nextOpponentJumpAt = now + RandomJumpDelay();
-            hasScheduledJumps = true;
-        }
-        if (now >= nextPlayerJumpAt)
-        {
-            playerJumpStartedAt = now;
-            nextPlayerJumpAt = now + RandomJumpDelay();
-        }
-        if (now >= nextOpponentJumpAt)
-        {
-            opponentJumpStartedAt = now;
-            nextOpponentJumpAt = now + RandomJumpDelay();
-        }
-
-        bool playerJumping = IsJumping(playerJumpStartedAt, now);
-        bool opponentJumping = IsJumping(opponentJumpStartedAt, now);
-        bool effectPending = effectColor != null || effectQueue.Count > 0;
-        bool flashActive = IsHitFlashActive(flashPlayerStartedAt, now) ||
-            IsHitFlashActive(flashOpponentStartedAt, now);
-        bool animating = playerJumping || opponentJumping || effectPending || flashActive;
-        if (!animating && !frameWasAnimating) return;
         if (now < nextFrameAt) return;
         nextFrameAt = now + 80;
-        if (effectColor == null && effectQueue.TryDequeue(out var nextEffect))
-        {
-            effectColor = nextEffect.Color;
-            effectType = nextEffect.Type;
-            effectFromPlayer = nextEffect.FromPlayer;
-            effectStartedAt = now;
-        }
-        double progress = (now - effectStartedAt) / 500.0;
-        bool showEffect = effectColor != null && progress <= 1;
-        if (!showEffect)
-        {
-            effectColor = null;
-            effectType = null;
-        }
-        int playerOffset = JumpOffset(playerJumpStartedAt, now);
-        int opponentOffset = JumpOffset(opponentJumpStartedAt, now);
-        InGameRenderer.DrawBattleFrame(battle, playerOffset, opponentOffset,
-            IsHitFlashOn(flashPlayerStartedAt, now), IsHitFlashOn(flashOpponentStartedAt, now),
-            showEffect ? effectColor : null, showEffect ? effectType : null,
-            effectFromPlayer, progress);
-        frameWasAnimating = animating;
+        if (AdvanceBattleAnimation(now)) ShowMenu();
+        if (result != null) return;
+        if (animation.IsBusy || deferredBattleMessages.Count > 0) idleStartedAt = now;
+        int idleOffset = IdleOffset(now);
+        int playerOffset = battle.Team[battle.Active].Pokemon.CurrentHp > 0 ? idleOffset : 0;
+        int opponentOffset = battle.Opponent.CurrentHp > 0 ? idleOffset : 0;
+        var frame = (Battle: battle, PlayerOffset: playerOffset, OpponentOffset: opponentOffset,
+            PlayerHidden: animation.FlashPlayer, OpponentHidden: animation.FlashOpponent,
+            Type: animation.EffectType, FromPlayer: animation.FromPlayer, Progress: animation.Progress);
+        ConsoleRenderThreads.Sprites(() => InGameRenderer.DrawBattleFrame(
+            frame.Battle, frame.PlayerOffset, frame.OpponentOffset, frame.PlayerHidden, frame.OpponentHidden,
+            frame.Type, frame.FromPlayer, frame.Progress));
     }
 
-    private static bool IsHitFlashActive(long startedAt, long now) =>
-        startedAt > 0 && now - startedAt < 320;
-
-    private static bool IsHitFlashOn(long startedAt, long now) =>
-        IsHitFlashActive(startedAt, now) && (now - startedAt) / 80 % 2 == 0;
-
-    private static long RandomJumpDelay() => Random.Shared.Next(1_000, 30_001);
-
-    private static bool IsJumping(long startedAt, long now) => startedAt > 0 && now - startedAt < 360;
-
-    private static int JumpOffset(long startedAt, long now)
+    private bool AdvanceBattleAnimation(long now)
     {
-        if (!IsJumping(startedAt, now)) return 0;
-        long elapsed = now - startedAt;
-        return elapsed switch { < 100 => 0, < 260 => -1, _ => 0 };
+        animation.Update(now);
+        bool changed = false;
+        while (!animation.IsBusy && deferredBattleMessages.TryPeek(out var next))
+        {
+            // 공격 직후의 중간 HP·상태·기록을 먼저 그린 뒤, 다음 프레임에서 후공을 시작한다.
+            if (changed && next.Message.StartsWith("BATTLE_EFFECT ")) break;
+            deferredBattleMessages.Dequeue();
+            ApplyServerMessage(next.Message, next.ReceivedAt);
+            changed = true;
+        }
+        // 새로 받은 공격만 시작한다. 중간 정보를 반영한 프레임에서는 후공을 다음 프레임까지 보관한다.
+        animation.Update(now);
+        return changed;
     }
+
+    // 콘솔 한 줄만 위로 올렸다가 복귀한다. 대기 없이 0.8초 주기로 반복한다.
+    private int IdleOffset(long now) => animation.IsBusy || deferredBattleMessages.Count > 0 ? 0
+        : (now - idleStartedAt) % IdleCycleMilliseconds < IdleCycleMilliseconds / 2 ? 0 : -1;
 
     public override async Task<bool> HandleCommand(
         string input, StreamWriter writer, CancellationToken cancellationToken)
     {
+        if (animation.IsBusy && result == null) return true;
         Notification = null;
 
         if (result != null)
@@ -336,6 +302,17 @@ sealed class InGameState : ClientState
             else
                 pickedPokemon.Add(pokemon);
         }
+        else if (id == 0)
+        {
+            int[] moveIds = target.LearnableMoveIds.Distinct().ToArray();
+            Random.Shared.Shuffle(moveIds);
+            selectedMoves.Clear();
+            selectedMoves.AddRange(moveIds.Take(4));
+            var movesById = catalog.Moves.ToDictionary(move => move.MoveId);
+            Notification = $"{InGameRenderer.DisplayName(target)}의 무작위 기술: " +
+                string.Join(" / ", selectedMoves.Select(moveId => movesById[moveId].Name));
+            await CompleteMoveSelectionAsync(target, writer);
+        }
         else if (!target.LearnableMoveIds.Contains(id))
             Notification = "선택한 포켓몬이 배울 수 있는 기술 번호를 입력하세요.";
         else if (selectedMoves.Contains(id))
@@ -344,17 +321,20 @@ sealed class InGameState : ClientState
         {
             selectedMoves.Add(id);
             if (selectedMoves.Count == 4)
-            {
-                team.Add(new PokemonSelection(target.PokemonId, selectedMoves.ToArray()));
-                selectedMoves.Clear();
-                if (team.Count == TeamSize)
-                {
-                    await writer.WriteLineAsync("SELECT_TEAM " + JsonSerializer.Serialize(team));
-                    submitted = true;
-                }
-            }
+                await CompleteMoveSelectionAsync(target, writer);
         }
         return true;
+    }
+
+    private async Task CompleteMoveSelectionAsync(PokemonCatalogEntry pokemon, StreamWriter writer)
+    {
+        team.Add(new PokemonSelection(pokemon.PokemonId, selectedMoves.ToArray()));
+        selectedMoves.Clear();
+        if (team.Count == TeamSize)
+        {
+            await writer.WriteLineAsync("SELECT_TEAM " + JsonSerializer.Serialize(team));
+            submitted = true;
+        }
     }
 
     private async Task HandleBattleInput(string input, StreamWriter writer)

@@ -10,7 +10,6 @@ class Program
     {
         // 서버를 같은 PC에서 실행하면 기본값(루프백)을 사용하고,
         // 다른 PC의 서버라면 첫 번째 인자로 서버의 IPv4 주소를 전달한다
-=======
         string host = args.Length > 0 ? args[0] : "127.0.0.1";
         int port = 5050;
 
@@ -31,6 +30,7 @@ class Program
             client.Connect(host, port);
             using ISoundManager sound = SoundManager.Initialize();
             Console.WriteLine($"서버 접속 완료: {host}:{port}");
+            using var renderThreads = new ConsoleRenderThreads();
 
             // 메세지 송/수신용 스트림 버퍼 생성
             using NetworkStream stream = new NetworkStream(client);
@@ -58,6 +58,7 @@ class Program
                     await writer.WriteLineAsync("3");
                     client.Shutdown(SocketShutdown.Send);
                     await receiving.WaitAsync(TimeSpan.FromSeconds(3));
+                    ConsoleRenderThreads.Flush();
                     Console.WriteLine("\n서버와의 연결이 종료되었습니다.");
                 }
             }
@@ -117,13 +118,14 @@ class Program
                     state = nextState;
                     break;
                 case ConnectionClosed closed:
+                    ConsoleRenderThreads.Flush();
                     if (closed.Error != null)
                         Console.WriteLine($"\n{closed.Error}");
                     Console.WriteLine("\n서버와의 연결이 종료되었습니다.");
                     return false;
             }
 
-            // 상태 변경과 모든 메뉴 출력은 이 루프에서만 수행한다.
+            // 게임 상태는 이 루프에서만 변경한다. 전투 출력에는 시점별 복사본을 전달한다.
             state.ShowMenu();
         }
 
