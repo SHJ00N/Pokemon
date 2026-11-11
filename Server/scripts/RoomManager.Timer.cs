@@ -2,7 +2,7 @@
 // 서버는 매초 시간을 보내지 않고, 마감 시각까지 답이 왔는지만 확인한다.
 partial class RoomManager
 {
-    public const int TeamTimeLimitSeconds = 60;     // 포켓몬·기술 선택. 넘기면 바로 패배
+    public const int TeamTimeLimitSeconds = 300;    // 포켓몬·기술 선택 5분. 넘기면 바로 패배
     public const int ActionTimeLimitSeconds = 60;   // 턴마다 행동 선택(기절 후 교체 포함)
     private const int MaxTimeouts = 2;              // 한 전투에서 행동 선택 시간을 이만큼 넘기면 패배
 

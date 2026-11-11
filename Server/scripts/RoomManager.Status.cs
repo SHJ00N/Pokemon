@@ -108,8 +108,8 @@ partial class RoomManager
     {
         string color = data.TypesById[move.TypeId].ColorRgb;
         string type = data.TypesById[move.TypeId].Name;
-        room.Host.QueueMessage($"BATTLE_EFFECT {color} {type} {(attacker == room.HostSide ? "SELF" : "OPPONENT")}");
-        room.Guest!.QueueMessage($"BATTLE_EFFECT {color} {type} {(attacker == room.GuestSide ? "SELF" : "OPPONENT")}");
+        room.Host.QueueMessage($"BATTLE_EFFECT {move.TypeId} {color} {type} {(attacker == room.HostSide ? "SELF" : "OPPONENT")}");
+        room.Guest!.QueueMessage($"BATTLE_EFFECT {move.TypeId} {color} {type} {(attacker == room.GuestSide ? "SELF" : "OPPONENT")}");
     }
 
     // reflected: 매직코트로 되돌아온 기술 (기술 이름 기록은 이미 남겼다)

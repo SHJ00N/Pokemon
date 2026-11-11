@@ -9,7 +9,7 @@ abstract class ClientState
     public abstract Task<bool> HandleCommand(
         string input, StreamWriter writer, CancellationToken cancellationToken);
 
-    // Runs on the client's single event loop so animated output never races with menus.
+    // 연출 상태는 이벤트 루프에서 갱신하고, 출력에는 그 시점의 복사본을 전달한다.
     public virtual void OnFrame() { }
 
     public virtual ClientState HandleServerMessage(string message)
@@ -34,6 +34,7 @@ abstract class ClientState
 
     public virtual void ShowMenu()
     {
+        ConsoleRenderThreads.Flush();
         Console.Clear();
         Console.WriteLine(Menu);
         if (Notification != null)
