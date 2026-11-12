@@ -17,8 +17,13 @@ static class StatusColorRenderer
     private const string LoweredColor = "#FF5A5A";  // 내려간 능력치
     private const string EffectColor = "#5BC0EB";   // 기충전·아쿠아링·뿌리박기
 
-    public static void WriteStatus(string status) =>
-        TypeColorRenderer.WriteColored($"[{status}]", StatusColors.GetValueOrDefault(status, "#FFFFFF"));
+    public static string FormatStatus(string status) =>
+        TypeColorRenderer.Colorize($"[{status}]", StatusColors.GetValueOrDefault(status, "#FFFFFF"));
+
+    public static void WriteStatus(string status) => TextRenderer.Write(FormatStatus(status));
+
+    public static string FormatStatChange(string change) => TypeColorRenderer.Colorize(change,
+        change.Contains('+') ? RaisedColor : change.Contains('-') ? LoweredColor : EffectColor);
 
     // 능력치 변화를 한 줄로 출력한다. maxWidth를 넘는 항목은 출력하지 않는다.
     public static void WriteStatChanges(IEnumerable<string> changes, int maxWidth)
@@ -31,8 +36,7 @@ static class StatusColorRenderer
                 break;
             if (used > 0)
                 TextRenderer.Write(" ");
-            string color = change.Contains('+') ? RaisedColor : change.Contains('-') ? LoweredColor : EffectColor;
-            TypeColorRenderer.WriteColored(change, color);
+            TextRenderer.Write(FormatStatChange(change));
             used += width;
         }
     }

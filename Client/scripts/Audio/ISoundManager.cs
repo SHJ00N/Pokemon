@@ -1,9 +1,14 @@
 namespace Client;
 
+enum SoundPlaybackState { Stopped, Pending, Playing }
+
 interface ISoundManager : IDisposable
 {
     void LoadSound(string id, string path);
     void PlaySound(string id);
+    void PlaySoundSequence(string firstId, string nextId);
+    SoundPlaybackState GetSoundState(string id);
+    void StopSound(string id);
     void PlayBgm(string path, bool loop = true);
     void StopBgm();
     void StopAll();

@@ -8,6 +8,7 @@ static class InGameRenderer
 
     private static readonly BattleSpriteBuffer spriteBuffer = new();
     private static (int Width, int Height, int StatusY)? battleLayout;
+    private const int BattleInformationRows = 24;
 
     // 목록에 표시하는 이름. 같은 종의 다른 폼과 구분해야 하면 폼 이름을 붙인다. 예: 라이츄 (알로라의 모습)
     public static string DisplayName(PokemonCatalogEntry entry) =>
@@ -130,92 +131,65 @@ static class InGameRenderer
     {
         int width = Console.BufferWidth;
         int height = Console.BufferHeight;
-        if (width < 76 || height < 27)
-        {
-            TextRenderer.Clear();
-            battleLayout = null;
-            spriteBuffer.Reset();
-            TextRenderer.WriteLine("두 포켓몬을 표시하려면 76열 × 27행 이상의 터미널이 필요합니다.");
-            return;
-        }
-
         TeamMemberView active = battle.Team[battle.Active];
-        int rightX = width / 2 + 1;
-        int columns = width / 2 - 4;
-        int maxRows = height - 19;
+        int leftX = 2;
+        int columns = Math.Max(1, width / 2 - 4);
+        int maxRows = Math.Max(1, height - BattleInformationRows);
         string[] player = PokemonRenderer.Load(active.Pokemon.PokemonId, active.Pokemon.SpeciesId, maxRows, columns, flip: true);
         string[] opponent = PokemonRenderer.Load(battle.Opponent.PokemonId, battle.Opponent.SpeciesId, maxRows, columns, flip: false);
-        int statusY = Math.Max(player.Length, opponent.Length) + 3;
+        int statusY = Math.Max(player.Length, opponent.Length) + 4;
         var layout = (width, height, statusY);
         if (battleLayout != layout)
         {
             TextRenderer.Clear();
             spriteBuffer.Reset();
             battleLayout = layout;
-            TextRenderer.At(2, 0, "내 포켓몬");
-            TextRenderer.At(rightX, 0, "상대 포켓몬");
         }
         // HP·메뉴 갱신이 포켓몬 그림 영역을 지우지 않게 한다.
         var clearInformation = new System.Text.StringBuilder("\x1b[0m");
         for (int row = statusY; row < height; row++)
             clearInformation.Append($"\x1b[{row + 1};1H\x1b[2K");
         Console.Write(clearInformation.ToString());
-        DrawStatus(active.Pokemon, 2, statusY, columns);
-        DrawStatus(battle.Opponent, rightX, statusY, columns);
+        var panels = BattlePanelRenderer.Arrange(battle, width, statusY, switchList, showBack);
+        foreach (var panel in panels)
+            BattlePanelRenderer.Draw(panel.Lines, panel.X, panel.Y);
 
-        string back = showBack ? "  (0. 뒤로)" : "";
-        if (switchList != null)
-        {
-            TextRenderer.At(2, statusY + 3, "교체할 포켓몬" + back);
-            for (int index = 0; index < switchList.Count; index++)
-            {
-                PokemonView pokemon = battle.Team[switchList[index]].Pokemon;
-                TextRenderer.At(2, statusY + 4 + index,
-                    $"{index + 1}. {pokemon.Name} (HP {pokemon.CurrentHp}/{pokemon.MaxHp}) ");
-                if (pokemon.Status != null)
-                    StatusColorRenderer.WriteStatus(pokemon.Status);
-            }
-        }
-        else
-        {
-            TextRenderer.At(2, statusY + 3, "기술" + back);
-            for (int index = 0; index < active.Moves.Length; index++)
-            {
-                MoveView move = active.Moves[index];
-                TextRenderer.At(2, statusY + 4 + index, $"{index + 1}. ");
-                TypeColorRenderer.WriteMarker(move.Type.ColorRgb);
-                TextRenderer.Write(" " + TextRenderer.FitToWidth(move.Name, columns - 6));
-            }
-        }
-
+        int logY = panels.Max(panel => panel.Y + panel.Lines.Length) + 1;
         for (int index = 0; index < battleLog.Count; index++)
-            TextRenderer.At(2, statusY + 9 + index, TextRenderer.FitToWidth(battleLog[index], width - 4));
+            TextRenderer.At(leftX, logY + index, TextRenderer.FitToWidth(battleLog[index], width - 4));
         if (notification != null)
-            TextRenderer.At(2, statusY + 14, TextRenderer.FitToWidth(notification, width - 4));
+            TextRenderer.At(leftX, logY + 6, TextRenderer.FitToWidth(notification, width - 4));
         // 입력 커서가 안내 문구 바로 뒤에 오도록 마지막에 출력한다. 남은 시간은 그 줄 맨 앞에 둔다.
-        TextRenderer.At(2, statusY + 15, (timerSeconds is int seconds ? FormatTimer(seconds) : "") + prompt);
+        TextRenderer.At(leftX, logY + 7, (timerSeconds is int seconds ? FormatTimer(seconds) : "") + prompt);
         if (timerSeconds != null)
             timerColumn = 2;
     }
 
+    internal static int GetSpriteRows(PokemonView pokemon) => PokemonRenderer.Load(
+        pokemon.PokemonId, pokemon.SpeciesId, Math.Max(1, Console.BufferHeight - BattleInformationRows),
+        Math.Max(1, Console.BufferWidth / 2 - 4), flip: false).Length;
+
     // Animation frames update only the sprite area, leaving menus and logs steady.
     public static void DrawBattleFrame(BattleView battle, int playerJumpOffset, int opponentJumpOffset,
         bool flashPlayer, bool flashOpponent,
-        TypeView? effectType, bool effectFromPlayer, double effectProgress)
+        TypeView? effectType, bool effectFromPlayer, double effectProgress,
+        double playerFaintProgress = 0, double opponentFaintProgress = 0,
+        StatusAnimation.Effect? statusEffect = null, bool? healingOnPlayer = null)
     {
         int width = Console.BufferWidth;
         int height = Console.BufferHeight;
-        if (width < 76 || height < 27) return;
-
-        int rightX = width / 2 + 1;
-        int columns = width / 2 - 4;
-        int maxRows = height - 19;
+        int columns = Math.Max(1, width / 2 - 4);
+        int maxRows = Math.Max(1, height - BattleInformationRows);
         string[] player = PokemonRenderer.Load(battle.Team[battle.Active].Pokemon.PokemonId, battle.Team[battle.Active].Pokemon.SpeciesId, maxRows, columns, flip: true);
         string[] opponent = PokemonRenderer.Load(battle.Opponent.PokemonId, battle.Opponent.SpeciesId, maxRows, columns, flip: false);
+        int rightX = width - Math.Max(BattlePanelRenderer.Width,
+            PokemonRenderer.GetHorizontalBounds(opponent).MaxX + 1) - 2;
 
         spriteBuffer.BeginFrame();
-        spriteBuffer.AddImage(player, 2, 2 + playerJumpOffset, flashPlayer);
-        spriteBuffer.AddImage(opponent, rightX, 2 + opponentJumpOffset, flashOpponent);
+        spriteBuffer.AddImage(player, 2, 2 + playerJumpOffset, flashPlayer,
+            (int)Math.Round(Math.Clamp(playerFaintProgress, 0, 1) * player.Length));
+        spriteBuffer.AddImage(opponent, rightX, 2 + opponentJumpOffset, flashOpponent,
+            (int)Math.Round(Math.Clamp(opponentFaintProgress, 0, 1) * opponent.Length));
         if (effectType != null && effectProgress is >= 0 and <= 1)
         {
             string effectColor = effectType.ColorRgb;
@@ -257,7 +231,36 @@ static class InGameRenderer
                 }
             }
         }
+        if (statusEffect is { } status)
+        {
+            string[] target = status.OnPlayer ? player : opponent;
+            int targetX = status.OnPlayer ? 2 : rightX;
+            int targetY = 2 + (status.OnPlayer ? playerJumpOffset : opponentJumpOffset);
+            DrawStatusOverlay(spriteBuffer, status, target, targetX, targetY, width);
+        }
+        if (healingOnPlayer is bool onPlayer)
+        {
+            string[] target = onPlayer ? player : opponent;
+            int targetX = onPlayer ? 2 : rightX;
+            int targetY = 2 + (onPlayer ? playerJumpOffset : opponentJumpOffset);
+            DrawHealingOverlay(spriteBuffer, target, targetX, targetY, width);
+        }
         spriteBuffer.Flush(width, height);
+    }
+
+    internal static void DrawStatusOverlay(BattleSpriteBuffer buffer, StatusAnimation.Effect effect,
+        string[] target, int x, int y, int width)
+    {
+        var (minX, maxX) = PokemonRenderer.GetHorizontalBounds(target);
+        AttackImageRenderer.Draw(effect.TypeId, x + (minX + maxX + 1) / 2,
+            y + target.Length / 2, flip: !effect.OnPlayer, width, y, y + target.Length, buffer);
+    }
+
+    internal static void DrawHealingOverlay(BattleSpriteBuffer buffer, string[] target, int x, int y, int width)
+    {
+        var (minX, maxX) = PokemonRenderer.GetHorizontalBounds(target);
+        AttackImageRenderer.DrawHeal(x + (minX + maxX + 1) / 2,
+            y + target.Length / 2, width, y, y + target.Length, buffer);
     }
 
     private static void DrawTypeTrail(int x, int y, string type, int direction, string color, int width, int height,
@@ -327,21 +330,4 @@ static class InGameRenderer
             TextRenderer.WriteLine("\n  " + notification);
     }
 
-    private static void DrawStatus(PokemonView pokemon, int x, int y, int columns)
-    {
-        TextRenderer.At(x, y, TextRenderer.FitToWidth(pokemon.Name, columns));
-        TextRenderer.At(x, y + 1, $"HP {pokemon.CurrentHp}/{pokemon.MaxHp} ");
-        foreach (TypeView type in pokemon.Types)
-        {
-            TypeColorRenderer.WriteMarker(type.ColorRgb);
-            TextRenderer.Write(" ");
-        }
-        if (pokemon.Status != null)
-            StatusColorRenderer.WriteStatus(pokemon.Status);
-        if (pokemon.StatChanges is { Length: > 0 } changes)
-        {
-            Console.SetCursorPosition(x, y + 2);
-            StatusColorRenderer.WriteStatChanges(changes, columns);
-        }
-    }
 }
