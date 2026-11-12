@@ -16,14 +16,15 @@ sealed class BattleSpriteBuffer
         if (character != ' ') current[(x, y)] = (ansi, character);
     }
 
-    public void AddImage(string[] lines, int x, int y, bool hidden)
+    public void AddImage(string[] lines, int x, int y, bool hidden, int sunkRows = 0)
     {
         if (hidden) return;
-        for (int row = 0; row < lines.Length; row++)
+        sunkRows = Math.Clamp(sunkRows, 0, lines.Length);
+        for (int row = 0; row < lines.Length - sunkRows; row++)
         {
             var cells = PokemonRenderer.Parse(lines[row]);
             for (int column = 0; column < cells.Count; column++)
-                SetPixel(x + column, y + row, cells[column].Ansi, cells[column].Character);
+                SetPixel(x + column, y + row + sunkRows, cells[column].Ansi, cells[column].Character);
         }
     }
 

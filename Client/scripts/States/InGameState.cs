@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using Pokemon.Protocol;
 
@@ -34,6 +35,12 @@ sealed class InGameState : ClientState
     private const int IdleCycleMilliseconds = 800;
     private long idleStartedAt;
     private readonly BattleAnimation animation = new();
+    private readonly StatusAnimation statusAnimation = new();
+    private readonly HealingAnimation healingAnimation = new();
+    private string? lastOverlaySound;
+    private readonly FaintAnimation playerFaint = new(), opponentFaint = new();
+    private bool IsAnimating => animation.IsBusy || statusAnimation.IsBusy || healingAnimation.IsBusy ||
+        playerFaint.IsBusy || opponentFaint.IsBusy;
     private readonly Queue<(string Message, long ReceivedAt)> deferredBattleMessages = new();
 
     // 선택 제한시간 (서버 RoomManager.Timer.cs와 같은 값). 서버는 남은 시간을 보내지 않으므로
@@ -58,7 +65,7 @@ sealed class InGameState : ClientState
 
     public override void ShowMenu()
     {
-        if (battle != null && result == null && animation.IsBusy) return;
+        if (battle != null && result == null && (animation.IsBusy || statusAnimation.IsBusy || healingAnimation.IsBusy)) return;
         shownSeconds = RemainingSeconds;
         // 출력 스레드에는 이후 입력·서버 메시지로 바뀌지 않는 시점의 값만 전달한다.
         var view = (Catalog: catalog, Names: pickedPokemon.Select(InGameRenderer.DisplayName).ToArray(),
@@ -75,14 +82,16 @@ sealed class InGameState : ClientState
             int offset = IdleOffset(Environment.TickCount64);
             int playerOffset = view.Battle.Team[view.Battle.Active].Pokemon.CurrentHp > 0 ? offset : 0;
             int opponentOffset = view.Battle.Opponent.CurrentHp > 0 ? offset : 0;
+            double playerFaintProgress = playerFaint.Progress, opponentFaintProgress = opponentFaint.Progress;
             ConsoleRenderThreads.Sprites(() => InGameRenderer.DrawBattleFrame(
-                view.Battle, playerOffset, opponentOffset, false, false, null, false, 0));
+                view.Battle, playerOffset, opponentOffset, false, false, null, false, 0,
+                playerFaintProgress, opponentFaintProgress));
         }
     }
 
     public override void UpdateTimer()
     {
-        if (animation.IsBusy) return;
+        if (IsAnimating || deferredBattleMessages.Count > 0) return;
         if (RemainingSeconds is int seconds && seconds != shownSeconds)
         {
             shownSeconds = seconds;
@@ -93,10 +102,10 @@ sealed class InGameState : ClientState
     private string GetPrompt() => menu switch
     {
         BattleMenu.Main => "행동을 선택하세요. 1. 싸운다 2. 교체 3. 항복: ",
-        BattleMenu.Fight => "공격할 기술의 번호를 선택하세요: ",
-        BattleMenu.Switch => "교체할 포켓몬의 번호를 선택하세요: ",
+        BattleMenu.Fight => "공격할 기술의 번호를 선택하세요(0 : 취소): ",
+        BattleMenu.Switch => "교체할 포켓몬의 번호를 선택하세요(0 : 취소): ",
         BattleMenu.ForcedSwitch => "포켓몬이 쓰러졌습니다. 내보낼 포켓몬 번호: ",
-        BattleMenu.BatonPass => "배턴터치로 내보낼 포켓몬의 번호를 선택하세요: ",
+        BattleMenu.BatonPass => "배턴터치로 내보낼 포켓몬의 번호를 선택하세요(0 : 취소): ",
         BattleMenu.Surrender => "항복하면 패배합니다. 1. 항복 0. 뒤로: ",
         _ => "상대방의 행동을 기다리고 있습니다. (3. 항복)"
     };
@@ -109,7 +118,7 @@ sealed class InGameState : ClientState
     {
         long receivedAt = Environment.TickCount64;
         // 뒤따르는 HP·교체·승패를 먼저 표시하면 공격 연출이 중간에 사라지므로 순서대로 보관한다.
-        if (battle != null && (animation.IsBusy || deferredBattleMessages.Count > 0) &&
+        if (battle != null && (IsAnimating || deferredBattleMessages.Count > 0) &&
             (message.StartsWith("BATTLE_") || message is "CHOOSE_ACTION" or "CHOOSE_SWITCH" or "WAIT_SWITCH" or "LOCKED"))
         {
             deferredBattleMessages.Enqueue((message, receivedAt));
@@ -135,15 +144,50 @@ sealed class InGameState : ClientState
                 deadline = null;    // 포켓몬 선택 제한시간 끝. 행동 선택 제한시간은 CHOOSE_ACTION부터 센다.
                 idleStartedAt = Environment.TickCount64;
             }
-            battle = JsonSerializer.Deserialize<BattleView>(message[13..])
+            var nextBattle = JsonSerializer.Deserialize<BattleView>(message[13..])
                 ?? throw new InvalidDataException("전투 화면 정보를 해석할 수 없습니다.");
+            ApplyHealthEffects(nextBattle);
+            battle = nextBattle;
             return this;
         }
         if (message.StartsWith("BATTLE_EFFECT "))
         {
-            string[] effect = message.Split(' ', 5);
-            if (effect.Length == 5 && int.TryParse(effect[1], out int typeId))
-                animation.Enqueue(new TypeView(typeId, effect[3], effect[2]), effect[4] == "SELF");
+            string[] effect = message.Split(' ', 6);
+            if (effect.Length >= 5 && int.TryParse(effect[1], out int typeId))
+            {
+                double effectiveness = effect.Length == 6 && double.TryParse(effect[5],
+                    NumberStyles.Float, CultureInfo.InvariantCulture, out double multiplier) ? multiplier : 1;
+                animation.Enqueue(new TypeView(typeId, effect[3], effect[2]), effect[4] == "SELF", effectiveness);
+            }
+            return this;
+        }
+        if (message.StartsWith("BATTLE_STATUS "))
+        {
+            string[] effect = message.Split(' ');
+            if (effect.Length == 3 && effect[2] is "SELF" or "OPPONENT")
+                statusAnimation.Enqueue(effect[1], effect[2] == "SELF");
+            return this;
+        }
+        if (message.StartsWith("BATTLE_STAT "))
+        {
+            string[] effect = message.Split(' ');
+            if (effect.Length == 4 && int.TryParse(effect[1], out int typeId) && typeId is >= 1 and <= 18 &&
+                effect[2] is "UP" or "DOWN" && effect[3] is "SELF" or "OPPONENT")
+                statusAnimation.EnqueueStat(typeId, effect[3] == "SELF", effect[2] == "UP");
+            return this;
+        }
+        if (message.StartsWith("BATTLE_BUFF "))
+        {
+            string[] effect = message.Split(' ');
+            if (effect.Length == 3 && int.TryParse(effect[1], out int typeId) && typeId is >= 1 and <= 18 &&
+                effect[2] is "SELF" or "OPPONENT")
+                statusAnimation.EnqueueStat(typeId, effect[2] == "SELF", raised: true);
+            return this;
+        }
+        if (message is "BATTLE_HEAL SELF" or "BATTLE_HEAL OPPONENT")
+        {
+            healingAnimation.Start(message == "BATTLE_HEAL SELF");
+            SoundManager.Instance.PlaySoundSequence(SoundManager.HeldItemActivate, SoundManager.HealHp);
             return this;
         }
         if (message.StartsWith("BATTLE_LOG "))
@@ -170,6 +214,7 @@ sealed class InGameState : ClientState
             // BATTLE_END <WIN|LOSE|DRAW> [SURRENDER|LEFT|TIMEOUT]: 항복·퇴장·시간 초과로 끝났으면 이유가 붙는다.
             string[] parts = message.Split(' ');
             result = parts[1];
+            SoundManager.Instance.StopSound(SoundManager.HealthLow);
             menu = BattleMenu.Waiting;
             Notification = parts.Length < 3 ? null : (parts[1], parts[2]) switch
             {
@@ -236,46 +281,114 @@ sealed class InGameState : ClientState
         if (battle == null || result != null) return;
         long now = Environment.TickCount64;
         if (now < nextFrameAt) return;
-        nextFrameAt = now + 80;
+        // 쓰러질 때의 줄 이동과 회복음 시작에 맞춘 이미지 표시를 자주 확인한다.
+        nextFrameAt = now + (playerFaint.IsBusy || opponentFaint.IsBusy || healingAnimation.IsBusy ? 16 : 80);
         if (AdvanceBattleAnimation(now)) ShowMenu();
         if (result != null) return;
-        if (animation.IsBusy || deferredBattleMessages.Count > 0) idleStartedAt = now;
+        if (IsAnimating || deferredBattleMessages.Count > 0) idleStartedAt = now;
         int idleOffset = IdleOffset(now);
         int playerOffset = battle.Team[battle.Active].Pokemon.CurrentHp > 0 ? idleOffset : 0;
         int opponentOffset = battle.Opponent.CurrentHp > 0 ? idleOffset : 0;
         var frame = (Battle: battle, PlayerOffset: playerOffset, OpponentOffset: opponentOffset,
             PlayerHidden: animation.FlashPlayer, OpponentHidden: animation.FlashOpponent,
-            Type: animation.EffectType, FromPlayer: animation.FromPlayer, Progress: animation.Progress);
+            Type: animation.EffectType, FromPlayer: animation.FromPlayer, Progress: animation.Progress,
+            PlayerFaintProgress: playerFaint.Progress, OpponentFaintProgress: opponentFaint.Progress,
+            StatusEffect: statusAnimation.Overlay,
+            HealingTarget: healingAnimation.ShowImage ? healingAnimation.OnPlayer : (bool?)null);
         ConsoleRenderThreads.Sprites(() => InGameRenderer.DrawBattleFrame(
             frame.Battle, frame.PlayerOffset, frame.OpponentOffset, frame.PlayerHidden, frame.OpponentHidden,
-            frame.Type, frame.FromPlayer, frame.Progress));
+            frame.Type, frame.FromPlayer, frame.Progress, frame.PlayerFaintProgress, frame.OpponentFaintProgress,
+            frame.StatusEffect, frame.HealingTarget));
     }
 
     private bool AdvanceBattleAnimation(long now)
     {
-        animation.Update(now);
+        bool wasFainting = playerFaint.IsBusy || opponentFaint.IsBusy;
+        playerFaint.Update(now);
+        opponentFaint.Update(now);
+        // 마지막 줄이 사라진 프레임을 먼저 그린 뒤 다음 프레임에 승패·교체 안내를 반영한다.
+        if (wasFainting && !playerFaint.IsBusy && !opponentFaint.IsBusy) return true;
+        UpdateAnimation(now);
         bool changed = false;
-        while (!animation.IsBusy && deferredBattleMessages.TryPeek(out var next))
+        while (!IsAnimating && deferredBattleMessages.TryPeek(out var next))
         {
-            // 공격 직후의 중간 HP·상태·기록을 먼저 그린 뒤, 다음 프레임에서 후공을 시작한다.
-            if (changed && next.Message.StartsWith("BATTLE_EFFECT ")) break;
+            // 연출 직후의 중간 HP·상태·기록을 먼저 그린 뒤 다음 연출을 시작한다.
+            if (changed && (next.Message.StartsWith("BATTLE_EFFECT ") || next.Message.StartsWith("BATTLE_STATUS ") ||
+                next.Message.StartsWith("BATTLE_STAT ") || next.Message.StartsWith("BATTLE_BUFF ") ||
+                next.Message.StartsWith("BATTLE_HEAL "))) break;
             deferredBattleMessages.Dequeue();
             ApplyServerMessage(next.Message, next.ReceivedAt);
             changed = true;
         }
-        // 새로 받은 공격만 시작한다. 중간 정보를 반영한 프레임에서는 후공을 다음 프레임까지 보관한다.
-        animation.Update(now);
+        // 새로 받은 연출만 시작한다. 중간 정보를 반영한 프레임에서는 다음 연출을 보관한다.
+        UpdateAnimation(now);
+        playerFaint.Update(now);
+        opponentFaint.Update(now);
         return changed;
     }
 
+    private void UpdateAnimation(long now)
+    {
+        if (healingAnimation.IsBusy)
+            healingAnimation.Update(now, SoundManager.Instance.GetSoundState(SoundManager.HealHp));
+        if (statusAnimation.Update(now) is string soundId)
+        {
+            // 연속된 상태·랭크 효과음이 서로 겹치지 않게 앞선 연출의 소리를 중단한다.
+            if (lastOverlaySound != null && lastOverlaySound != soundId)
+                SoundManager.Instance.StopSound(lastOverlaySound);
+            SoundManager.Instance.StopSound(soundId);
+            SoundManager.Instance.PlaySound(soundId);
+            lastOverlaySound = soundId;
+        }
+        if (animation.Update(now) is double effectiveness)
+            SoundManager.Instance.PlaySound(effectiveness < 1 ? SoundManager.HitWeak
+                : effectiveness > 1 ? SoundManager.HitSuper : SoundManager.HitNormal);
+    }
+
+    private void ApplyHealthEffects(BattleView next)
+    {
+        if (battle == null) return;
+
+        PokemonView player = next.Team[next.Active].Pokemon;
+        PokemonView previousPlayer = battle.Team[next.Active].Pokemon;
+        bool playerFainted = previousPlayer.CurrentHp > 0 && player.CurrentHp == 0;
+        bool opponentFainted = battle.Opponent.PokemonId == next.Opponent.PokemonId &&
+            battle.Opponent.CurrentHp > 0 && next.Opponent.CurrentHp == 0;
+        if (battle.Active != next.Active || (previousPlayer.CurrentHp == 0 && player.CurrentHp > 0))
+            playerFaint.Reset();
+        if (battle.Opponent.PokemonId != next.Opponent.PokemonId ||
+            (battle.Opponent.CurrentHp == 0 && next.Opponent.CurrentHp > 0))
+            opponentFaint.Reset();
+        if (playerFainted) playerFaint.Start(InGameRenderer.GetSpriteRows(player));
+        if (opponentFainted) opponentFaint.Start(InGameRenderer.GetSpriteRows(next.Opponent));
+        if (playerFainted || opponentFainted)
+        {
+            // 교체 메뉴가 열려 있었더라도 사라지는 연출과 다음 안내를 마칠 때까지 대기한다.
+            menu = BattleMenu.Waiting;
+            SoundManager.Instance.PlaySound(SoundManager.Faint);
+        }
+
+        // 상대 HP만 바뀐 메시지는 내 저체력 경고음을 건드리지 않는다.
+        if (battle.Active == next.Active && previousPlayer.CurrentHp == player.CurrentHp &&
+            previousPlayer.MaxHp == player.MaxHp) return;
+        if (!IsLowHealth(player) || battle.Active != next.Active)
+            SoundManager.Instance.StopSound(SoundManager.HealthLow);
+        // 살아 있는 내 출전 포켓몬이 저체력 구간에 진입할 때만 한 번 재생한다.
+        if (IsLowHealth(player) && (battle.Active != next.Active || !IsLowHealth(previousPlayer)))
+            SoundManager.Instance.PlaySound(SoundManager.HealthLow);
+    }
+
+    private static bool IsLowHealth(PokemonView pokemon) =>
+        pokemon.CurrentHp > 0 && (long)pokemon.CurrentHp * 5 <= pokemon.MaxHp;
+
     // 콘솔 한 줄만 위로 올렸다가 복귀한다. 대기 없이 0.8초 주기로 반복한다.
-    private int IdleOffset(long now) => animation.IsBusy || deferredBattleMessages.Count > 0 ? 0
+    private int IdleOffset(long now) => IsAnimating || deferredBattleMessages.Count > 0 ? 0
         : (now - idleStartedAt) % IdleCycleMilliseconds < IdleCycleMilliseconds / 2 ? 0 : -1;
 
     public override async Task<bool> HandleCommand(
         string input, StreamWriter writer, CancellationToken cancellationToken)
     {
-        if (animation.IsBusy && result == null) return true;
+        if ((IsAnimating || deferredBattleMessages.Count > 0) && result == null) return true;
         Notification = null;
 
         if (result != null)
@@ -373,7 +486,7 @@ sealed class InGameState : ClientState
                 if (input == "0")
                     menu = BattleMenu.Main;
                 else if (number < 1 || number > moveCount)
-                    Notification = $"기술 번호 1~{moveCount}를 입력하세요. (0. 뒤로)";
+                    Notification = $"기술 번호 1~{moveCount}를 입력하세요.";
                 else if (battle.Team[battle.Active].Moves[number - 1].MoveId == BatonPassMoveId &&
                          GetSwitchCandidates().Count > 0)
                 {

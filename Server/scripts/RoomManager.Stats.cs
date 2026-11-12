@@ -156,6 +156,48 @@ partial class RoomManager
             ChangeStage(room, target, stat, stages, announceFailure: true);
     }
 
+    // 실제 변화 방향마다 한 번만 연출한다. 배턴터치의 교체·랭크 전달은 증감으로 처리하지 않는다.
+    private static bool SendStatEffects(GameRoom room, BattleSide side, BattlePokemon original,
+        int[] before, bool focusEnergyBefore, int typeId)
+    {
+        if (!ReferenceEquals(side.Current, original)) return false;
+        bool raised = !focusEnergyBefore && original.FocusEnergy;
+        bool lowered = focusEnergyBefore && !original.FocusEnergy;
+        for (int index = 0; index < before.Length; index++)
+        {
+            raised |= original.Stages[index] > before[index];
+            lowered |= original.Stages[index] < before[index];
+        }
+        foreach (string direction in new[] { "UP", "DOWN" })
+        {
+            if (direction == "UP" ? !raised : !lowered) continue;
+            side.Player.QueueMessage($"BATTLE_STAT {typeId} {direction} SELF");
+            GetOther(room, side).Player.QueueMessage($"BATTLE_STAT {typeId} {direction} OPPONENT");
+        }
+        return raised;
+    }
+
+    // 자신·우리 편의 보호·지속 효과. 실패하거나 턴이 지나는 것만으로는 늘지 않는 값을 비교한다.
+    private static int[] GetBuffLevels(BattleSide side)
+    {
+        BattlePokemon pokemon = side.Current;
+        return [
+            side.ReflectTurns, side.LightScreenTurns, side.TailwindTurns, side.MistTurns,
+            side.LuckyChantTurns, side.SafeguardTurns, side.WishTurns,
+            side.QuickGuard ? 1 : 0, pokemon.Protected ? 1 : 0, pokemon.Enduring ? 1 : 0,
+            pokemon.MagicCoat ? 1 : 0, pokemon.SubstituteHp,
+            pokemon.AquaRing ? 1 : 0, pokemon.Ingrained ? 1 : 0, pokemon.StockpileCount, pokemon.ChargeTurns
+        ];
+    }
+
+    private static bool HasNewBuff(BattleSide side, int[] before)
+    {
+        int[] after = GetBuffLevels(side);
+        for (int index = 0; index < before.Length; index++)
+            if (after[index] > before[index]) return true;
+        return false;
+    }
+
     // 랭크 대신 우리 편·필드 효과를 걸거나, 능력치를 나누고 바꾸는 기술
     private static void UseSpecialMove(GameRoom room, BattleSide attacker, BattleSide defender, PokemonMoveInfo move)
     {

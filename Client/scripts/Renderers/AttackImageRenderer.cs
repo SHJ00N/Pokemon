@@ -5,25 +5,31 @@ namespace Client;
 static class AttackImageRenderer
 {
     // ANSI를 한 번만 해석하고 프레임마다 재사용한다. 공백은 투명 픽셀이다.
-    private static readonly Dictionary<int, (string Ansi, char Character)[][]> images = new();
+    private static readonly Dictionary<string, (string Ansi, char Character)[][]> images = new(StringComparer.Ordinal);
 
-    private static (string Ansi, char Character)[][] Load(int typeId)
+    private static (string Ansi, char Character)[][] Load(string folder, string fileName)
     {
-        if (images.TryGetValue(typeId, out var image)) return image;
-        string path = Path.Combine(AppContext.BaseDirectory, "resources", "type_scripts",
-            $"{typeId:D2}_attack_image.txt");
+        string path = Path.Combine(AppContext.BaseDirectory, "resources", folder, fileName);
+        if (images.TryGetValue(path, out var image)) return image;
         image = File.Exists(path)
             ? File.ReadAllLines(path, Encoding.UTF8).Select(line => PokemonRenderer.Parse(line).ToArray()).ToArray()
             : [];
-        images[typeId] = image;
+        images[path] = image;
         return image;
     }
 
     // 한 픽셀은 가로 두 글자다. 비율을 유지해 축소하고 전투 그림 영역 안에 배치한다.
     internal static IEnumerable<(int X, int Y, string Ansi, char Character)> GetCells(
-        int typeId, int centerX, int centerY, bool flip, int width, int top, int bottom)
+        int typeId, int centerX, int centerY, bool flip, int width, int top, int bottom) =>
+        GetCells(Load("type_scripts", $"{typeId:D2}_attack_image.txt"), centerX, centerY, flip, width, top, bottom);
+
+    internal static IEnumerable<(int X, int Y, string Ansi, char Character)> GetHealCells(
+        int centerX, int centerY, int width, int top, int bottom) =>
+        GetCells(Load("effect_scripts", "heal_image.txt"), centerX, centerY, false, width, top, bottom);
+
+    private static IEnumerable<(int X, int Y, string Ansi, char Character)> GetCells(
+        (string Ansi, char Character)[][] image, int centerX, int centerY, bool flip, int width, int top, int bottom)
     {
-        var image = Load(typeId);
         if (image.Length == 0 || bottom <= top || width < 3) yield break;
         int sourcePixels = image.Max(row => row.Length) / 2;
         if (sourcePixels == 0) yield break;
@@ -61,5 +67,11 @@ static class AttackImageRenderer
         {
             buffer.SetPixel(cell.X, cell.Y, cell.Ansi, cell.Character);
         }
+    }
+
+    public static void DrawHeal(int centerX, int centerY, int width, int top, int bottom, BattleSpriteBuffer buffer)
+    {
+        foreach (var cell in GetHealCells(centerX, centerY, width, top, bottom))
+            buffer.SetPixel(cell.X, cell.Y, cell.Ansi, cell.Character);
     }
 }
