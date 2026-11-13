@@ -5,12 +5,22 @@ internal sealed record PokemonTypeInfo(int Id, string Name, string ColorRgb);
 
 internal sealed record PokemonMoveInfo(
     int Id, string Name, int TypeId, string Category,
-    int? Power, int? Accuracy, int Pp, int Priority, bool IsMultiHit);
+    int? Power, int? Accuracy, int Pp, int Priority, bool IsMultiHit, int Generation);
 
 internal sealed record StatusConditionInfo(int Id, string Code, string Name);
 
 internal sealed record MoveStatusEffectInfo(
     int MoveId, int StatusId, double Chance, string Target, string Timing, int EffectGroup);
+
+// 기술 부가 효과 (MoveMeta). 값의 의미는 Server/resources/db/README.md "기술 부가 효과"
+internal sealed record MoveMetaInfo(
+    int MoveId, string Category, string Target, string? Ailment, int AilmentChance,
+    int? MinHits, int? MaxHits, int? MinTurns, int? MaxTurns,
+    int Drain, int Healing, int CritRate, int FlinchChance, int StatChance);
+
+// 기술의 능력치 변화 (MoveStatChange). Stat: attack, defense, special-attack, special-defense, speed, accuracy, evasion
+// Target: self(자신) 또는 opponent(상대)
+internal sealed record MoveStatChangeInfo(int MoveId, string Stat, int Change, int Chance, string Target);
 
 // Id: 폼 번호 (기본 폼 = 전국도감 번호, 다른 폼 = 10001 이후). SpeciesId: 전국도감 번호
 // IsSelectable: 팀에 넣을 수 있는 폼인지 (메가진화·거다이맥스 등 전투 중에만 되는 폼은 false)
@@ -28,11 +38,13 @@ internal sealed record PokemonInfo(
     int BaseDefense,
     int BaseSpAttack,
     int BaseSpDefense,
-    int BaseSpeed);
+    int BaseSpeed,
+    int Weight);    // 몸무게 (0.1kg 단위)
 
 /* 
 db에서 추출한 기본 데이터
-테이블 목록 : 포켓몬(폼), 타입, 기술, 타입간 상관 관계, 포켓몬별 기술 목록, 상태이상, 기술별 상태이상 효과
+테이블 목록 : 포켓몬(폼), 타입, 기술, 타입간 상관 관계, 포켓몬별 기술 목록, 상태이상, 기술별 상태이상 효과,
+              기술 부가 효과(MoveMeta), 기술의 능력치 변화(MoveStatChange)
 포켓몬·기술·타입·상성은 현재 세대(페어리 포함 18타입) 데이터다. 종·진화·특성·도구·폼 체인지 테이블도 DB에 있지만
 아직 전투에서 쓰지 않아 읽지 않는다. (Server/resources/db/README.md)
 
@@ -46,6 +58,9 @@ internal sealed class GameData
     public FrozenDictionary<int, PokemonMoveInfo> MovesById { get; } // 기술 테이블
     public FrozenDictionary<int, StatusConditionInfo> StatusConditionsById { get; } // 상태이상 테이블
     public FrozenDictionary<int, IReadOnlyList<MoveStatusEffectInfo>> MoveStatusEffectsByMoveId { get; } // 기술의 상태이상 적용 확률 테이블
+    public FrozenDictionary<int, MoveMetaInfo> MoveMetaById { get; } // 기술 부가 효과 테이블 (없는 기술도 있다)
+    public FrozenDictionary<int, IReadOnlyList<MoveStatChangeInfo>> MoveStatChangesByMoveId { get; } // 기술의 능력치 변화 테이블
+    public FrozenDictionary<int, FrozenSet<string>> MoveFlagsByMoveId { get; } // 기술 플래그 (contact, snatch, mirror, heal 등)
     public FrozenDictionary<(int AttackTypeId, int DefendTypeId), double> EffectivenessByType { get; } // 타입 상성 테이블
 
     public FrozenDictionary<int, FrozenSet<int>> LearnableMovesByPokemonId { get; } // 배우는 기술 목록 테이블
@@ -57,8 +72,12 @@ internal sealed class GameData
         FrozenDictionary<(int AttackTypeId, int DefendTypeId), double> effectivenessByType,
         FrozenDictionary<int, FrozenSet<int>> learnableMovesByPokemonId,
         FrozenDictionary<int, StatusConditionInfo> statusConditionsById,
-        FrozenDictionary<int, IReadOnlyList<MoveStatusEffectInfo>> moveStatusEffectsByMoveId)
+        FrozenDictionary<int, IReadOnlyList<MoveStatusEffectInfo>> moveStatusEffectsByMoveId,
+        FrozenDictionary<int, MoveMetaInfo> moveMetaById,
+        FrozenDictionary<int, IReadOnlyList<MoveStatChangeInfo>> moveStatChangesByMoveId,
+        FrozenDictionary<int, FrozenSet<string>> moveFlagsByMoveId)
     {
+        MoveFlagsByMoveId = moveFlagsByMoveId;
         PokemonById = pokemonById;
         TypesById = typesById;
         MovesById = movesById;
@@ -66,6 +85,8 @@ internal sealed class GameData
         LearnableMovesByPokemonId = learnableMovesByPokemonId;
         StatusConditionsById = statusConditionsById;
         MoveStatusEffectsByMoveId = moveStatusEffectsByMoveId;
+        MoveMetaById = moveMetaById;
+        MoveStatChangesByMoveId = moveStatChangesByMoveId;
     }
 
     public static GameData Load(string databasePath)
@@ -108,7 +129,11 @@ internal sealed class GameData
         var learnsets = LoadLearnsets(connection, pokemon, moves);
         var statuses = LoadStatusConditions(connection);
         var statusEffects = LoadMoveStatusEffects(connection, moves, statuses);
-        return new GameData(pokemon, types, moves, effectiveness, learnsets, statuses, statusEffects);
+        var moveMeta = LoadMoveMeta(connection, moves);
+        var statChanges = LoadMoveStatChanges(connection, moves);
+        var flags = LoadMoveFlags(connection, moves);
+        return new GameData(pokemon, types, moves, effectiveness, learnsets, statuses, statusEffects,
+            moveMeta, statChanges, flags);
     }
 
     // 두 타입의 상성 관계에 따른 데미지 배율
@@ -122,7 +147,7 @@ internal sealed class GameData
             SELECT pokemon_id, species_id, name, form_name, is_default, is_selectable,
                    type1_id, type2_id,
                    base_hp, base_attack, base_defense,
-                   base_sp_attack, base_sp_defense, base_speed
+                   base_sp_attack, base_sp_defense, base_speed, weight
             FROM Pokemon
             ORDER BY pokemon_id
             """;
@@ -145,7 +170,8 @@ internal sealed class GameData
                 reader.GetInt32(10),
                 reader.GetInt32(11),
                 reader.GetInt32(12),
-                reader.GetInt32(13));
+                reader.GetInt32(13),
+                reader.GetInt32(14));
             if (!pokemonById.TryAdd(pokemon.Id, pokemon))
                 throw new InvalidDataException($"중복된 포켓몬 번호: {pokemon.Id}");
         }
@@ -200,7 +226,7 @@ internal sealed class GameData
     {
         using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT move_id, name, type_id, category, power, accuracy, pp, priority, is_multi_hit
+            SELECT move_id, name, type_id, category, power, accuracy, pp, priority, is_multi_hit, generation
             FROM PokemonMove ORDER BY move_id
             """;
         using var reader = command.ExecuteReader();
@@ -211,7 +237,7 @@ internal sealed class GameData
                 reader.GetInt32(0), reader.GetString(1), reader.GetInt32(2),
                 reader.GetString(3), reader.IsDBNull(4) ? null : reader.GetInt32(4),
                 reader.IsDBNull(5) ? null : reader.GetInt32(5), reader.GetInt32(6), reader.GetInt32(7),
-                reader.GetBoolean(8));
+                reader.GetBoolean(8), reader.GetInt32(9));
             if (!moves.TryAdd(move.Id, move))
                 throw new InvalidDataException($"중복된 기술 ID: {move.Id}");
         }
@@ -268,6 +294,66 @@ internal sealed class GameData
 
         return effects.ToFrozenDictionary(pair => pair.Key,
             pair => (IReadOnlyList<MoveStatusEffectInfo>)pair.Value.AsReadOnly());
+    }
+
+    private static FrozenDictionary<int, MoveMetaInfo> LoadMoveMeta(
+        SqliteConnection connection, FrozenDictionary<int, PokemonMoveInfo> moves)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT move_id, category, target, ailment, ailment_chance, min_hits, max_hits, min_turns, max_turns,
+                   drain, healing, crit_rate, flinch_chance, stat_chance
+            FROM MoveMeta ORDER BY move_id
+            """;
+        using var reader = command.ExecuteReader();
+        int? OptionalInt(int index) => reader.IsDBNull(index) ? null : reader.GetInt32(index);
+        var meta = new Dictionary<int, MoveMetaInfo>();
+        while (reader.Read())
+        {
+            var entry = new MoveMetaInfo(reader.GetInt32(0), reader.GetString(1), reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetInt32(4),
+                OptionalInt(5), OptionalInt(6), OptionalInt(7), OptionalInt(8),
+                reader.GetInt32(9), reader.GetInt32(10), reader.GetInt32(11), reader.GetInt32(12), reader.GetInt32(13));
+            if (!moves.ContainsKey(entry.MoveId) || !meta.TryAdd(entry.MoveId, entry))
+                throw new InvalidDataException($"기술 부가 효과의 기술 번호가 잘못되었습니다: {entry.MoveId}");
+        }
+        return meta.ToFrozenDictionary();
+    }
+
+    private static FrozenDictionary<int, IReadOnlyList<MoveStatChangeInfo>> LoadMoveStatChanges(
+        SqliteConnection connection, FrozenDictionary<int, PokemonMoveInfo> moves)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT move_id, stat, change, chance, target FROM MoveStatChange ORDER BY move_id, rowid";
+        using var reader = command.ExecuteReader();
+        var changes = moves.Keys.ToDictionary(id => id, _ => new List<MoveStatChangeInfo>());
+        while (reader.Read())
+        {
+            var change = new MoveStatChangeInfo(reader.GetInt32(0), reader.GetString(1), reader.GetInt32(2),
+                reader.GetInt32(3), reader.GetString(4));
+            if (!changes.TryGetValue(change.MoveId, out var list))
+                throw new InvalidDataException($"능력치 변화의 기술 번호가 잘못되었습니다: {change.MoveId}");
+            list.Add(change);
+        }
+        return changes.ToFrozenDictionary(pair => pair.Key,
+            pair => (IReadOnlyList<MoveStatChangeInfo>)pair.Value.AsReadOnly());
+    }
+
+    // 모든 기술에 대해 플래그 집합을 돌려준다 (플래그가 없으면 빈 집합).
+    private static FrozenDictionary<int, FrozenSet<string>> LoadMoveFlags(
+        SqliteConnection connection, FrozenDictionary<int, PokemonMoveInfo> moves)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT move_id, flag FROM MoveFlag";
+        using var reader = command.ExecuteReader();
+        var flags = moves.Keys.ToDictionary(id => id, _ => new HashSet<string>());
+        while (reader.Read())
+        {
+            if (!flags.TryGetValue(reader.GetInt32(0), out var set))
+                throw new InvalidDataException($"기술 플래그의 기술 번호가 잘못되었습니다: {reader.GetInt32(0)}");
+            set.Add(reader.GetString(1));
+        }
+        return flags.ToFrozenDictionary(pair => pair.Key, pair => pair.Value.ToFrozenSet());
     }
 
     private static FrozenDictionary<(int AttackTypeId, int DefendTypeId), double>

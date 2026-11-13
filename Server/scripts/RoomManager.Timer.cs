@@ -57,17 +57,18 @@ partial class RoomManager
         Console.WriteLine($"방 {room.Id} 포켓몬 선택 시간 초과");
     }
 
-    // 행동 선택 시간이 지나면 고르지 않은 쪽은 이번 턴을 쉰다. 기절 후 교체였다면 남은 첫 포켓몬이 나간다.
-    // 한 전투에서 MaxTimeouts번 넘기면 진다.
+    // 행동 선택 시간이 지나면 고르지 않은 쪽은 이번 턴을 쉰다. 기절 후 교체나 턴 도중 교체(유턴 등)였다면
+    // 남은 첫 포켓몬이 나간다. 한 전투에서 MaxTimeouts번 넘기면 진다.
     private void ActionTimeout(GameRoom room)
     {
         BattleSide host = room.HostSide!, guest = room.GuestSide!;
         room.ActionDeadline = null;
 
-        // 기절 후 교체를 기다리는 중이면 교체할 쪽만, 아니면 아직 고르지 않은 쪽이 늦은 것이다.
-        bool forcedSwitch = host.MustSwitch || guest.MustSwitch;
+        // 턴 도중 교체나 기절 후 교체를 기다리는 중이면 교체할 쪽만, 아니면 아직 고르지 않은 쪽이 늦은 것이다.
+        bool midTurn = host.SwitchingMidTurn || guest.SwitchingMidTurn;
+        bool forcedSwitch = !midTurn && (host.MustSwitch || guest.MustSwitch);
         BattleSide[] late = new[] { host, guest }
-            .Where(side => forcedSwitch ? side.MustSwitch : !side.HasChosen).ToArray();
+            .Where(side => midTurn ? side.SwitchingMidTurn : forcedSwitch ? side.MustSwitch : !side.HasChosen).ToArray();
         if (late.Length == 0)
             return;
         foreach (BattleSide side in late)
@@ -87,13 +88,17 @@ partial class RoomManager
         {
             Log(room, side, $"시간 안에 행동을 고르지 않았다! ({MaxTimeouts - side.Timeouts}번 더 넘기면 패배)",
                 "상대가 시간 안에 행동을 고르지 않았다!");
+            if (midTurn)
+            {
+                // 출전 중이 아닌, HP가 남은 첫 포켓몬과 교체하고 남은 턴을 이어서 처리한다.
+                CompleteMidTurnSwitch(room, side,
+                    Enumerable.Range(0, side.Team.Length).First(index => index != side.Active && side.Team[index].Hp > 0));
+                return;
+            }
             if (forcedSwitch)
             {
                 // 쓰러진 출전 포켓몬의 HP는 0이므로 HP가 남은 첫 포켓몬은 항상 교체 대상이다.
-                ChangeActive(room, side, Array.FindIndex(side.Team, pokemon => pokemon.Hp > 0));
-                side.MustSwitch = false;
-                Log(room, side, $"가라, {side.Current.Info.Name}!",
-                    $"상대가 {WithJosa(side.Current.Info.Name, "을", "를")} 내보냈다!");
+                SendInReplacement(room, side, Array.FindIndex(side.Team, pokemon => pokemon.Hp > 0));
             }
             else
                 side.SkipTurn = true;
@@ -101,8 +106,8 @@ partial class RoomManager
 
         if (forcedSwitch)
         {
-            SendBattleState(room);
-            StartTurn(room);
+            if (!EndBattleIfOver(room))
+                StartTurn(room);
         }
         else
             TryResolveTurn(room);   // 늦은 쪽은 쉬고 상대의 행동과 턴 끝 처리만 진행한다.

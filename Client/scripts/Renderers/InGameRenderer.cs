@@ -150,6 +150,8 @@ static class InGameRenderer
         for (int row = statusY; row < height; row++)
             clearInformation.Append($"\x1b[{row + 1};1H\x1b[2K");
         Console.Write(clearInformation.ToString());
+        // 맨 윗줄: 날씨·필드·공간 효과와 남은 턴. 포켓몬 그림은 둘째 줄 아래에 그리므로 겹치지 않는다.
+        TextRenderer.At(leftX, 0, TextRenderer.FitToWidth(string.Join("  ", battle.FieldEffects ?? []), width - 4));
         var panels = BattlePanelRenderer.Arrange(battle, width, statusY, switchList, showBack);
         foreach (var panel in panels)
             BattlePanelRenderer.Draw(panel.Lines, panel.X, panel.Y);

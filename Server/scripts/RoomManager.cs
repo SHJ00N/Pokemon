@@ -227,8 +227,7 @@ partial class RoomManager
     }
 
     // slot: 출전 중인 포켓몬의 기술 4개 중 몇 번째인지 (1~4)
-    // batonTeamSlot: 배턴터치일 때 내보낼 팀 번호 (1~3). 교체할 포켓몬이 없으면 생략한다.
-    public void UseMove(ClientSession session, int slot, int? batonTeamSlot = null)
+    public void UseMove(ClientSession session, int slot)
     {
         lock (roomsLock)
         {
@@ -239,24 +238,17 @@ partial class RoomManager
                 return;
             }
 
-            if (me.Current.Moves[slot - 1].Id == BatonPassMoveId)
+            // 사슬묶기·앙코르·트집·도발·회복봉인·봉인으로 쓸 수 없는 기술은 고를 수 없다.
+            // 쓸 수 있는 기술이 하나도 없으면 어느 기술을 골라도 발버둥을 쓴다.
+            me.Struggling = false;
+            if (MoveBlockedBy(me, other, slot) is string cause)
             {
-                bool hasBench = me.Team.Where((pokemon, index) => index != me.Active && pokemon.Hp > 0).Any();
-                if (batonTeamSlot is int teamSlot)
+                if (!MustStruggle(me, other))
                 {
-                    int index = teamSlot - 1;
-                    if (index == me.Active || me.Team[index].Hp == 0)
-                    {
-                        session.QueueMessage("ERROR 배턴터치로 내보낼 수 없는 포켓몬입니다.");
-                        return;
-                    }
-                    me.BatonTarget = index;
-                }
-                else if (hasBench)
-                {
-                    session.QueueMessage("ERROR 배턴터치로 내보낼 포켓몬을 고르세요.");
+                    session.QueueMessage($"ERROR {cause} 때문에 {WithJosa(me.Current.Moves[slot - 1].Name, "을", "를")} 쓸 수 없습니다.");
                     return;
                 }
+                me.Struggling = true;
             }
 
             me.ChosenMove = slot;
@@ -282,14 +274,25 @@ partial class RoomManager
                 return;
             }
 
+            // 유턴·배턴터치 등으로 턴 도중에 교체하는 중이면 교체하고 남은 턴을 이어서 처리한다.
+            if (me.SwitchingMidTurn)
+            {
+                CompleteMidTurnSwitch(room, me, index);
+                return;
+            }
+            if (other.SwitchingMidTurn)
+            {
+                session.QueueMessage("ERROR 지금은 교체할 수 없습니다.");
+                return;
+            }
+
             // 쓰러진 포켓몬 대신 내보내는 교체는 턴을 쓰지 않는다. 상대도 추가로 공격하지 못한다.
+            // 나오자마자 설치기로 쓰러지면 다시 고르고, 남은 포켓몬이 없으면 전투가 끝난다.
             if (me.MustSwitch)
             {
-                ChangeActive(room, me, index);
-                me.MustSwitch = false;
-                Log(room, me, $"가라, {me.Current.Info.Name}!", $"상대가 {WithJosa(me.Current.Info.Name, "을", "를")} 내보냈다!");
-                SendBattleState(room);
-                StartTurn(room);
+                SendInReplacement(room, me, index);
+                if (!EndBattleIfOver(room))
+                    StartTurn(room);
                 return;
             }
 
@@ -301,6 +304,21 @@ partial class RoomManager
             if (me.Current.Ingrained)
             {
                 session.QueueMessage("ERROR 뿌리를 박고 있어서 교체할 수 없습니다.");
+                return;
+            }
+            if (me.Current.SkyDropped)
+            {
+                session.QueueMessage("ERROR 상대의 프리폴에 붙잡혀 있어서 교체할 수 없습니다.");
+                return;
+            }
+            if (room.FairyLockTurns > 0)
+            {
+                session.QueueMessage("ERROR 페어리록 때문에 이번 턴에는 교체할 수 없습니다.");
+                return;
+            }
+            if (IsTrapped(me, other))
+            {
+                session.QueueMessage("ERROR 상대에게 붙잡혀 있어서 교체할 수 없습니다.");
                 return;
             }
 
@@ -369,15 +387,18 @@ partial class RoomManager
         }
     }
 
-    // 새 턴을 시작한다. 난동 기술로 고정된 포켓몬은 행동을 자동으로 정한다.
+    // 새 턴을 시작한다. 난동 기술·2턴 기술의 공격 턴·반동으로 쉬는 턴인 포켓몬은 행동을 자동으로 정한다(LOCKED).
     private void StartTurn(GameRoom room)
     {
         BattleSide host = room.HostSide!, guest = room.GuestSide!;
         if (!host.MustSwitch && !guest.MustSwitch)
         {
             foreach (BattleSide side in new[] { host, guest })
-                if (side.Current.LockedSlot is int slot)
+            {
+                BattlePokemon pokemon = side.Current;
+                if ((pokemon.LockedSlot ?? pokemon.ChargingSlot ?? pokemon.RechargeSlot) is int slot)
                     side.ChosenMove = slot;
+            }
         }
         SendPrompts(room);
         room.ActionDeadline = Deadline(ActionTimeLimitSeconds);   // 클라이언트도 안내를 받은 순간부터 센다.
@@ -391,6 +412,33 @@ partial class RoomManager
         if (!host.HasChosen || !guest.HasChosen)
             return;
 
+        room.TurnNumber++;
+        room.LastMoveIdThisTurn = 0;
+        foreach (BattleSide side in new[] { host, guest })
+        {
+            side.FaintedLastTurn = side.FaintedThisTurn;
+            side.FaintedThisTurn = false;
+            side.TurnActor = side.Current;
+            side.Current.ClearTurnRecord();
+        }
+
+        // 따라가때리기: 상대가 교체하려고 하면 교체하기 전에 위력 2배로 공격한다. 쓰러지면 교체하지 않고 턴 끝에 다시 고른다.
+        var pursued = new HashSet<BattleSide>();
+        foreach (BattleSide side in new[] { host, guest })
+        {
+            BattleSide pursuer = GetOther(room, side);
+            if (side.ChosenSwitch == null || pursuer.ChosenMove is not int slot ||
+                pursuer.Current.Moves[slot - 1].Id != PursuitMoveId || pursuer.Current.RechargeSlot != null)
+                continue;
+            side.Current.SwitchingOut = true;
+            ExecuteMove(room, pursuer, side, movesLast: false);
+            side.Current.SwitchingOut = false;
+            pursued.Add(pursuer);
+            SendBattleState(room);
+            if (side.Current.Hp == 0)
+                side.ChosenSwitch = null;
+        }
+
         foreach (BattleSide side in new[] { host, guest })
         {
             if (side.ChosenSwitch is not int index)
@@ -400,22 +448,55 @@ partial class RoomManager
             string next = side.Current.Info.Name;
             Log(room, side, $"돌아와, {previous}! 가라, {next}!",
                 $"상대가 {WithJosa(previous, "을", "를")} 거두고 {WithJosa(next, "을", "를")} 내보냈다!");
+            ApplyEntryHazards(room, side);
             SendBattleState(room);
         }
 
         // 우선도가 높은 기술 → 스피드가 빠른 포켓몬(트릭룸이면 느린 포켓몬) → 같으면 무작위
         List<BattleSide> attackers = new[] { host, guest }
-            .Where(side => side.ChosenMove != null)
+            .Where(side => side.ChosenMove != null && !pursued.Contains(side))
             .OrderByDescending(side => side.Current.Moves[side.ChosenMove!.Value - 1].Priority)
             .ThenByDescending(side => room.TrickRoomTurns > 0 ? -GetSpeed(side) : GetSpeed(side))
             .ThenBy(_ => Random.Shared.Next())
             .ToList();
 
-        for (int index = 0; index < attackers.Count; index++)
+        foreach (BattleSide side in new[] { host, guest })
+            side.TurnActor = side.Current;     // 교체해서 나온 포켓몬 (이번 턴의 기록은 교체할 때 지워졌다)
+        // 힘껏펀치: 턴이 시작될 때 기합을 모은다. 기술을 쓰기 전에 공격을 맞으면 실패한다.
+        foreach (BattleSide side in attackers)
         {
-            ExecuteMove(room, attackers[index], GetOther(room, attackers[index]), movesLast: index == attackers.Count - 1);
+            BattlePokemon pokemon = side.Current;
+            if (pokemon.Moves[side.ChosenMove!.Value - 1].Id == FocusPunchMoveId && pokemon.RechargeSlot == null &&
+                !pokemon.SkyDropped)
+                LogPokemon(room, side, $"{WithJosa(pokemon.Info.Name, "은", "는")} 기합을 모으기 시작했다!");
+        }
+
+        room.TurnQueue.Clear();
+        room.TurnQueue.AddRange(attackers);
+        ContinueTurn(room);
+    }
+
+    // 남은 행동을 순서대로 처리하고 턴을 끝낸다. 유턴·배턴터치 등으로 턴 도중에 교체할 포켓몬을 골라야 하면
+    // 그 자리에서 멈추고(CHOOSE_SWITCH_MIDTURN), 고르면 CompleteMidTurnSwitch가 다시 부른다.
+    private void ContinueTurn(GameRoom room)
+    {
+        BattleSide host = room.HostSide!, guest = room.GuestSide!;
+        while (room.TurnQueue.Count > 0)
+        {
+            BattleSide side = room.TurnQueue[0];
+            room.TurnQueue.RemoveAt(0);
+            // 드래곤테일 등으로 강제 교체되어 나온 포켓몬은 이번 턴에 행동하지 않는다.
+            if (!ReferenceEquals(side.Current, side.TurnActor))
+                continue;
+            ExecuteMove(room, side, GetOther(room, side), movesLast: room.TurnQueue.Count == 0);
             // 각 공격의 HP·상태·능력치 결과를 다음 공격 효과보다 먼저 보낸다.
             SendBattleState(room);
+            if (side.SwitchingMidTurn)
+            {
+                SendPrompts(room);
+                room.ActionDeadline = Deadline(ActionTimeLimitSeconds);
+                return;
+            }
         }
 
         EndOfTurn(room);
@@ -423,21 +504,26 @@ partial class RoomManager
         host.ChosenMove = guest.ChosenMove = null;
         host.ChosenSwitch = guest.ChosenSwitch = null;
         host.SkipTurn = guest.SkipTurn = false;
-        host.BatonTarget = guest.BatonTarget = null;
+        host.Struggling = guest.Struggling = false;
         SendBattleState(room);
+        if (!EndBattleIfOver(room))
+            StartTurn(room);
+    }
 
+    // 한쪽(또는 양쪽)의 포켓몬이 모두 쓰러졌으면 전투를 끝낸다. 끝났으면 true
+    // 턴 끝 데미지 등으로 양쪽 마지막 포켓몬이 함께 쓰러지면 무승부다.
+    private static bool EndBattleIfOver(GameRoom room)
+    {
+        BattleSide host = room.HostSide!, guest = room.GuestSide!;
         bool hostAlive = host.Team.Any(pokemon => pokemon.Hp > 0);
         bool guestAlive = guest.Team.Any(pokemon => pokemon.Hp > 0);
-        if (!hostAlive || !guestAlive)
-        {
-            // 턴 끝 데미지 등으로 양쪽 마지막 포켓몬이 함께 쓰러지면 무승부다.
-            room.BattleOver = true;
-            host.Player.QueueMessage(hostAlive ? "BATTLE_END WIN" : guestAlive ? "BATTLE_END LOSE" : "BATTLE_END DRAW");
-            guest.Player.QueueMessage(guestAlive ? "BATTLE_END WIN" : hostAlive ? "BATTLE_END LOSE" : "BATTLE_END DRAW");
-            Console.WriteLine($"방 {room.Id} 전투 종료");
-            return;
-        }
-        StartTurn(room);
+        if (hostAlive && guestAlive)
+            return false;
+        room.BattleOver = true;
+        host.Player.QueueMessage(hostAlive ? "BATTLE_END WIN" : guestAlive ? "BATTLE_END LOSE" : "BATTLE_END DRAW");
+        guest.Player.QueueMessage(guestAlive ? "BATTLE_END WIN" : hostAlive ? "BATTLE_END LOSE" : "BATTLE_END DRAW");
+        Console.WriteLine($"방 {room.Id} 전투 종료");
+        return true;
     }
 
     // 출전 포켓몬을 바꾼다. 나가는 포켓몬의 일시 상태와, 그 포켓몬 때문에 걸린 상대의 헤롱헤롱이 풀린다.
@@ -449,21 +535,53 @@ partial class RoomManager
         side.Current.OnSwitchIn();
     }
 
-    // 5세대 데미지 공식 (날씨, 특성, 아이템은 아직 반영하지 않음). HP는 바꾸지 않는다.
-    private (bool Supported, bool Hit, int Damage, double Effectiveness, bool Critical) CalculateDamage(
-        BattleSide attackerSide, BattleSide defenderSide, PokemonMoveInfo move)
+    // 6세대 데미지 공식 (특성, 아이템은 반영하지 않음). HP는 바꾸지 않는다.
+    // hit: 연속기의 몇 번째 타격인지. 명중 판정은 첫 타에서만 하고, 트리플킥은 매번 판정하며 위력이 10·20·30으로 오른다.
+    // user: 공격하는 포켓몬 (미래예지처럼 지금 나와 있지 않은 포켓몬의 공격일 때만 준다)
+    private (bool Supported, bool Hit, int Damage, double Effectiveness, bool Critical) CalculateDamage(GameRoom room,
+        BattleSide attackerSide, BattleSide defenderSide, PokemonMoveInfo move, int hit = 1, BattlePokemon? user = null)
     {
-        BattlePokemon attacker = attackerSide.Current, defender = defenderSide.Current;
-        // 변화 기술과 위력 값이 없는 기술은 효과가 아직 구현되지 않았다.
-        if (move.Category == "변화" || move.Power is not int power)
+        BattlePokemon attacker = user ?? attackerSide.Current, defender = defenderSide.Current;
+        // 변화 기술은 데미지가 없다.
+        if (move.Category == "변화")
             return (false, true, 0, 1, false);
 
-        if (!AccuracyCheck(attacker, defender, move))
-            return (true, false, 0, 1, false);
+        // 정해진 데미지를 주는 기술 (일격필살·지구던지기·카운터 등): 효과가 없는지만 본다.
+        // 일격필살은 명중률 30으로 랭크에 영향을 받지 않는다(같은 레벨).
+        if (FixedDamage(attacker, defender, move) is int fixedDamage)
+        {
+            bool ohko = OhkoMoveIds.Contains(move.Id);
+            bool lockedOn = ReferenceEquals(attacker.LockOnTarget, defender);
+            if (ohko ? !lockedOn && Random.Shared.Next(100) >= 30 : !AccuracyCheck(room, attacker, defender, move))
+                return (true, false, 0, 1, false);
+            return TypeMultiplier(move, defender, room) == 0
+                ? (true, true, 0, 0, false)
+                : (true, true, Math.Max(1, fixedDamage), 1, false);
+        }
 
-        double effectiveness = TypeMultiplier(move, defender);
-        if (effectiveness == 0)
+        if (BasePower(room, attackerSide, defenderSide, attacker, move, hit) is not int power)
+            return (false, true, 0, 1, false);
+
+        bool tripleKick = move.Id == TripleKickMoveId;
+        if ((hit == 1 || tripleKick) &&
+            !AccuracyCheck(room, attacker, defender, move, ignoreEvasion: IgnoreStageMoveIds.Contains(move.Id)))
+            return (true, false, 0, 1, false);
+        if (tripleKick)
+            power *= hit;
+
+        // 발버둥은 타입이 없어 상성 1배, 자속 보정도 없다.
+        double effectiveness = move.Id == StruggleMoveId ? 1 : TypeMultiplier(move, defender, room);
+        // 플라잉프레스: 격투와 비행 상성을 곱한다. 싱크로노이즈: 같은 타입이 없으면 효과가 없다.
+        if (move.Id == FlyingPressMoveId)
+            effectiveness *= TypeMultiplier(move with { TypeId = TypeIdOf("비행") }, defender, room);
+        if (move.Id == SynchronoiseMoveId && !SharesType(attacker, defender))
+            effectiveness = 0;
+        // 프리폴은 비행 타입에게 데미지를 주지 않는다(6세대).
+        if (effectiveness == 0 || (move.Id == SkyDropMoveId && HasType(defender, "비행")))
             return (true, true, 0, 0, false);
+        // 공중·땅속·물속에 숨은 상대를 맞히면 위력 2배 (바람일으키기·회오리, 지진·매그니튜드, 파도타기·바다회오리)
+        if (DoubleOnHiddenMoveIds.Contains(move.Id) && defender.Hidden is Air or Underground or Underwater)
+            power *= 2;
 
         // 충전: 전기 기술 위력 2배, 한 번 쓰면 끝난다.
         if (attacker.ChargeTurns > 0 && HasTypeName(move.TypeId, "전기"))
@@ -471,46 +589,57 @@ partial class RoomManager
             power *= 2;
             attacker.ChargeTurns = 0;
         }
-
         bool physical = move.Category == "물리";
-        bool critical = RollCritical(attacker, defenderSide);
-        int attackStage = attacker.GetStage(physical ? Stat.Attack : Stat.SpAttack);
-        int defenseStage = defender.GetStage(physical ? Stat.Defense : Stat.SpDefense);
+        bool critical = RollCritical(attacker, defenderSide, data.MoveMetaById.GetValueOrDefault(move.Id)?.CritRate ?? 0);
+        // 속임수는 상대의 공격과 공격 랭크로, 사이코쇼크 등은 상대의 방어로 계산한다. 야금야금·성스러운칼은 상대 랭크를 무시한다.
+        BattlePokemon attackSource = move.Id == FoulPlayMoveId ? defender : attacker;
+        bool targetsDefense = physical || DefenseTargetMoveIds.Contains(move.Id);
+        int attackStage = attackSource.GetStage(physical ? Stat.Attack : Stat.SpAttack);
+        int defenseStage = IgnoreStageMoveIds.Contains(move.Id) ? 0 : defender.GetStage(targetsDefense ? Stat.Defense : Stat.SpDefense);
         // 급소에 맞으면 공격 쪽의 불리한 랭크와 방어 쪽의 유리한 랭크를 무시한다.
         if (critical)
         {
             attackStage = Math.Max(0, attackStage);
             defenseStage = Math.Min(0, defenseStage);
         }
-        int attack = (int)((physical ? attacker.Attack : attacker.SpAttack) * StageMultiplier(attackStage));
-        int defense = Math.Max(1, (int)((physical ? defender.Defense : defender.SpDefense) * StageMultiplier(defenseStage)));
+        int attack = (int)((physical ? attackSource.Attack : attackSource.SpAttack) * StageMultiplier(attackStage));
+        // 원더룸: 방어와 특수방어 실제 능력치가 바뀐다 (랭크는 그대로). 모래바람: 바위 타입 특수방어 1.5배
+        bool useDefense = targetsDefense != room.WonderRoomTurns > 0;
+        double defenseStat = useDefense ? defender.Defense : defender.SpDefense;
+        if (!useDefense && room.Weather == Sand && HasType(defender, "바위"))
+            defenseStat *= 1.5;
+        int defense = Math.Max(1, (int)(defenseStat * StageMultiplier(defenseStage)));
 
         int damage = (2 * BattlePokemon.Level / 5 + 2) * power * attack / defense / 50 + 2;
-        if (physical && attacker.Status == Burn)
-            damage /= 2;                                      // 화상이면 물리 기술 데미지 절반
+        damage = (int)(damage * FieldPowerModifier(room, attacker, defender, move));   // 날씨·필드·흙놀이·물놀이
+        if (physical && attacker.Status == Burn && move.Id != FacadeMoveId)
+            damage /= 2;                                      // 화상이면 물리 기술 데미지 절반 (객기는 그대로, 6세대)
         if (!critical && (physical ? defenderSide.ReflectTurns : defenderSide.LightScreenTurns) > 0)
             damage /= 2;                                      // 리플렉터·빛의장막 (급소면 무시)
         if (critical)
-            damage *= 2;                                      // 급소 2배
+            damage = damage * 3 / 2;                          // 급소 1.5배 (6세대)
         damage = damage * Random.Shared.Next(85, 101) / 100;  // 난수 0.85~1.00
-        if (move.TypeId == attacker.Info.Type1Id || move.TypeId == attacker.Info.Type2Id)
+        if (attacker.Types.Contains(move.TypeId) && move.Id != StruggleMoveId)
             damage = damage * 3 / 2;                          // 자속 보정 1.5배
         damage = Math.Max(1, (int)(damage * effectiveness));  // 타입 상성
 
         return (true, true, damage, effectiveness, critical);
     }
 
+    // multiHit: 연속기는 급소와 데미지를 타격마다 따로 알리므로 여기서는 상성만 적는다.
     private static string DescribeMove(BattlePokemon attacker, PokemonMoveInfo move,
-        (bool Supported, bool Hit, int Damage, double Effectiveness, bool Critical) result)
+        (bool Supported, bool Hit, int Damage, double Effectiveness, bool Critical) result, bool multiHit = false)
     {
         string text = $"{attacker.Info.Name}의 {move.Name}!";
         if (!result.Supported) return text + " (아직 구현되지 않은 기술이라 효과가 없었다)";
+        if (move.Id == MagnitudeMoveId) text += $" 매그니튜드 {attacker.MagnitudeLevel}!";
         if (!result.Hit) return text + " 공격이 빗나갔다!";
         if (result.Effectiveness == 0) return text + " 효과가 없는 것 같다...";
-        if (result.Critical) text += " 급소에 맞았다!";
+        if (OhkoMoveIds.Contains(move.Id)) text += " 일격필살!";
+        if (result.Critical && !multiHit) text += " 급소에 맞았다!";
         if (result.Effectiveness > 1) text += " 효과가 굉장했다!";
         else if (result.Effectiveness < 1) text += " 효과가 별로인 듯하다...";
-        return text + $" ({result.Damage} 데미지)";
+        return multiHit ? text : text + $" ({result.Damage} 데미지)";
     }
 
     // 마지막 글자의 받침 유무에 따라 조사를 붙인다. 예: 마기라스를, 이상해씨를, 파이리가
@@ -534,18 +663,23 @@ partial class RoomManager
         {
             var team = side.Team.Select(p => new TeamMemberView(GetPokemon(p), p.Moves.Select(GetMove).ToArray()));
             side.Player.QueueMessage("BATTLE_STATE " + JsonSerializer.Serialize(
-                new BattleView(team.ToArray(), side.Active, GetPokemon(GetOther(room, side).Current))));
+                new BattleView(team.ToArray(), side.Active, GetPokemon(GetOther(room, side).Current),
+                    GetFieldEffects(room))));
         }
     }
 
     // CHOOSE_ACTION: 기술/교체 선택, CHOOSE_SWITCH: 쓰러진 포켓몬 대신 내보낼 포켓몬 선택,
-    // WAIT_SWITCH: 상대가 다음 포켓몬을 고르는 중, LOCKED: 난동 기술로 행동이 정해져 있어 선택 없이 대기
+    // CHOOSE_SWITCH_MIDTURN: 유턴·배턴터치 등으로 턴 도중에 교체할 포켓몬 선택,
+    // WAIT_SWITCH: 상대가 다음 포켓몬을 고르는 중,
+    // LOCKED: 난동 기술·2턴 기술의 공격 턴·반동으로 쉬는 턴이라 행동이 정해져 있어 선택 없이 대기
     private static void SendPrompts(GameRoom room)
     {
         foreach (BattleSide side in new[] { room.HostSide!, room.GuestSide! })
         {
             BattleSide other = GetOther(room, side);
-            side.Player.QueueMessage(side.MustSwitch ? "CHOOSE_SWITCH"
+            side.Player.QueueMessage(side.SwitchingMidTurn ? "CHOOSE_SWITCH_MIDTURN"
+                : other.SwitchingMidTurn ? "WAIT_SWITCH"
+                : side.MustSwitch ? "CHOOSE_SWITCH"
                 : other.MustSwitch ? "WAIT_SWITCH"
                 : side.HasChosen ? "LOCKED" : "CHOOSE_ACTION");
         }
@@ -591,7 +725,8 @@ partial class RoomManager
         new(move.Id, move.Name, GetType(move.TypeId), move.Power, move.Accuracy);
 
     private PokemonView GetPokemon(BattlePokemon pokemon) =>
-        new(pokemon.Info.Id, pokemon.Info.SpeciesId, pokemon.Info.Name, pokemon.Hp, pokemon.MaxHp, GetTypes(pokemon.Info),
+        new(pokemon.Info.Id, pokemon.Info.SpeciesId, pokemon.Info.Name, pokemon.Hp, pokemon.MaxHp,
+            pokemon.Types.Select(GetType).ToArray(),    // 물붓기 등으로 바뀐 지금 타입
             pokemon.Status == null ? null : StatusName(pokemon.Status), DescribeStages(pokemon));
 
     public void LeaveRoom(ClientSession session, bool notify = false)

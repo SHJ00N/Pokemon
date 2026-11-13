@@ -6,8 +6,10 @@
     python3 Server/tools/build_db.py --source <원본_폴더>     # 이미 받은 CSV로 DB 생성
 
 외부 패키지 없이 표준 라이브러리만 쓴다. 기존 DB는 --force를 줄 때만 덮어쓴다.
-PokéAPI에 없는 프로젝트 전용 데이터(타입 색상, 상태이상, 기술별 상태이상 효과)는
-Server/tools/db_custom/의 CSV에서 읽는다. 데이터 범위와 규칙은 Server/resources/db/README.md에 정리했다.
+PokéAPI에 없는 프로젝트 전용 데이터(타입 색상, 상태이상, 기술 1~559번의 상태이상 효과)는
+Server/tools/db_custom/의 CSV에서 읽는다. 기술의 능력치 변화·풀죽음·흡수·연속기 등과 560번 이후 기술의
+상태이상은 PokéAPI move_meta로 채운다. 데이터는 6세대(XY·ORAS) 기준이다: 팀에 넣을 수 있는 폼, 습득 기술,
+기술 값(move_changelog), 종족값(pokemon_stats_past). 데이터 범위와 규칙은 Server/resources/db/README.md에 정리했다.
 """
 import argparse
 import csv
@@ -28,9 +30,11 @@ SOURCE_FILES = [
     "pokemon_species", "pokemon_species_names", "pokemon", "pokemon_forms", "pokemon_form_names",
     "pokemon_types", "pokemon_stats", "types", "type_names", "type_efficacy",
     "moves", "move_names", "move_meta", "pokemon_moves", "version_groups",
+    "move_meta_stat_changes", "move_meta_ailments", "move_meta_categories", "move_targets", "stats",
     "abilities", "ability_names", "pokemon_abilities",
     "items", "item_names", "item_categories", "item_flag_map", "item_flags",
     "pokemon_evolution",
+    "move_changelog", "pokemon_stats_past", "move_flag_map", "move_flags",
 ]
 KO, EN = "3", "9"   # PokéAPI local_language_id
 
@@ -42,7 +46,12 @@ TYPE_IDS = range(1, 19)        # 노말~페어리. 스텔라(19)는 테라스탈
 REGIONS = ("alola", "galar", "hisui", "paldea")
 CATEGORY_KO = {"1": "변화", "2": "물리", "3": "특수"}   # move_damage_classes
 
-# 습득 기술 기준: 각 폼이 마지막으로 나온 '일반 배틀' 게임의 습득 기술 (README "습득 가능 기술").
+# 이 게임은 6세대(XY·ORAS) 기준이다 (README "6세대 기준"). 6세대 게임에 있던 폼만 팀에 넣을 수 있고,
+# 습득 기술은 XY·ORAS를 합친 것에 진화 전 단계의 기술(알 기술 포함)을 더한다. 기술 값과 종족값도 6세대 값으로 되돌린다.
+GEN6_VERSION_GROUPS = ("x-y", "omega-ruby-alpha-sapphire")
+GEN6 = 6
+
+# 6세대에 없던 폼의 습득 기술: 각 폼이 마지막으로 나온 '일반 배틀' 게임의 습득 기술 (팀에는 넣을 수 없다).
 # 배틀 방식이 다른 외전은 다른 게임에 없을 때만 쓴다.
 SPIN_OFF_VERSION_GROUPS = {"colosseum", "xd", "lets-go-pikachu-lets-go-eevee", "legends-arceus",
                            "legends-za", "mega-dimension"}
@@ -79,6 +88,12 @@ FORM_CHANGE_MOVES = {"rayquaza-mega": "dragon-ascent"}   # 메가스톤 없이 �
 REGION_KO = {"alola": "알로라", "galar": "가라르", "hisui": "히스이", "paldea": "팔데아"}
 # 배틀에 쓰이는 지닌 도구: 지닐 수 있는 도구 + 폼 체인지·Z기술 관련 분류
 ITEM_CATEGORIES = {"mega-stones", "z-crystals", "memories", "plates", "jewels", "species-specific"}
+
+# 기술 부가 효과 (move_meta)
+STAT_IDENTIFIERS = {"attack", "defense", "special-attack", "special-defense", "speed", "accuracy", "evasion"}
+SELF_TARGETS = {"user", "users-field", "user-and-allies", "user-or-ally", "ally", "all-allies"}   # move_targets
+AUTO_STATUS_FROM = 560   # 이 번호부터 상태이상 효과를 move_meta로 채운다 (1~559번은 db_custom CSV)
+CONDITIONAL_AILMENT_MOVES = {807}   # 질투의불꽃: 그 턴에 능력치가 오른 상대만 화상이라 자동으로 넣지 않는다
 
 SCHEMA = """
 CREATE TABLE Type (
@@ -200,6 +215,38 @@ CREATE TABLE MoveStatusEffect (
     PRIMARY KEY (move_id, status_id, target, timing)
 );
 CREATE INDEX IX_MoveStatusEffect_Status ON MoveStatusEffect(status_id);
+CREATE TABLE MoveMeta (
+    move_id INTEGER NOT NULL PRIMARY KEY REFERENCES PokemonMove(move_id),
+    category TEXT NOT NULL,                         -- PokéAPI move_meta_categories (damage, net-good-stats, damage-lower 등)
+    target TEXT NOT NULL,                           -- PokéAPI move_targets (selected-pokemon, user, all-opponents 등)
+    ailment TEXT,                                   -- PokéAPI move_meta_ailments (paralysis, trap, leech-seed 등). 없으면 NULL
+    ailment_chance INTEGER NOT NULL,                -- 상태이상 확률(%). 0이면 변화 기술의 주 효과
+    min_hits INTEGER,                               -- 연속기 타격 횟수. 연속기가 아니면 NULL
+    max_hits INTEGER,
+    min_turns INTEGER,                              -- 여러 턴 이어지는 효과의 턴 수(난동·조이기 등). 없으면 NULL
+    max_turns INTEGER,
+    drain INTEGER NOT NULL,                         -- 준 데미지의 %만큼 HP 흡수(양수)·반동(음수)
+    healing INTEGER NOT NULL,                       -- 최대 HP의 %만큼 회복(양수)·자신 피해(음수)
+    crit_rate INTEGER NOT NULL,                     -- 급소 랭크 보정 (급소율이 높은 기술 1)
+    flinch_chance INTEGER NOT NULL,                 -- 풀죽음 확률(%)
+    stat_chance INTEGER NOT NULL                    -- 능력치 변화 확률(%). 0이면 항상 (변화 기술)
+);
+CREATE TABLE MoveStatChange (
+    move_id INTEGER NOT NULL REFERENCES PokemonMove(move_id),
+    stat TEXT NOT NULL CHECK (stat IN ('attack', 'defense', 'special-attack', 'special-defense', 'speed',
+                                       'accuracy', 'evasion')),
+    change INTEGER NOT NULL CHECK (change <> 0),   -- 랭크 변화 단계 (+2, -1 등)
+    chance INTEGER NOT NULL CHECK (chance > 0 AND chance <= 100),
+    target TEXT NOT NULL CHECK (target IN ('self', 'opponent')),
+    PRIMARY KEY (move_id, stat)
+);
+-- 기술 플래그 (PokéAPI move_flags 식별자): contact(접촉), snatch(가로채기 대상), mirror(따라하기 대상), heal(회복 기술),
+-- sound(소리), powder(가루), punch, bite, pulse, protect(방어에 막힘), reflectable(매직코트) 등
+CREATE TABLE MoveFlag (
+    move_id INTEGER NOT NULL REFERENCES PokemonMove(move_id),
+    flag TEXT NOT NULL,
+    PRIMARY KEY (move_id, flag)
+);
 
 -- 진화 단계(0: 진화 전 단계가 없음)와 진화 가능 여부. 전투 전용 폼은 원래 폼을 본다.
 CREATE VIEW PokemonEvolutionInfo AS
@@ -313,6 +360,13 @@ def build(source: Path, out: Path, force: bool):
     ids = sorted(int(i) for i in species)
     check(ids == list(range(1, len(ids) + 1)), "종 번호가 1부터 연속되지 않습니다.")
 
+    # ── 게임 버전 (6세대 기준) ─────────────────────────────────
+    version_groups = {r["id"]: r for r in src("version_groups")}
+    vg_order = {k: int(v["order"]) for k, v in version_groups.items()}
+    gen6_vgs = {k for k, v in version_groups.items() if v["identifier"] in GEN6_VERSION_GROUPS}
+    check(len(gen6_vgs) == len(GEN6_VERSION_GROUPS), "XY·ORAS 버전을 찾을 수 없습니다.")
+    gen6_last = max(vg_order[k] for k in gen6_vgs)
+
     # ── 폼(포켓몬) ─────────────────────────────────────────────
     forms_by_pokemon = defaultdict(list)
     forms = {}
@@ -329,6 +383,21 @@ def build(source: Path, out: Path, force: bool):
     stat_rows = defaultdict(dict)
     for r in src("pokemon_stats"):
         stat_rows[r["pokemon_id"]][int(r["stat_id"])] = int(r["base_stat"])
+    # 6세대 종족값: pokemon_stats_past의 generation_id는 그 값이 쓰인 마지막 세대다.
+    # 능력치마다 6세대 이상인 것 중 가장 이른 값이 6세대 값이다.
+    gen6_stats = defaultdict(dict)   # pokemon_id → stat_id → (generation, 값)
+    for r in src("pokemon_stats_past"):
+        stat_id, generation = int(r["stat_id"]), int(r["generation_id"])
+        if stat_id in range(1, 7) and generation >= GEN6:
+            old = gen6_stats[r["pokemon_id"]].get(stat_id)
+            if old is None or generation < old[0]:
+                gen6_stats[r["pokemon_id"]][stat_id] = (generation, int(r["base_stat"]))
+    stat_changes_gen6 = []
+    for pid, changed in gen6_stats.items():
+        if pid in stat_rows:
+            for stat_id, (_, value) in changed.items():
+                stat_rows[pid][stat_id] = value
+            stat_changes_gen6.append(pid)
     ability_rows = defaultdict(list)
     for r in src("pokemon_abilities"):
         ability_rows[r["pokemon_id"]].append(r)
@@ -392,9 +461,13 @@ def build(source: Path, out: Path, force: bool):
             "stats": [s[i] for i in range(1, 7)],
             "height": int(r["height"]), "weight": int(r["weight"]),
             "abilities": sorted((int(a["slot"]), int(a["ability_id"]), int(a["is_hidden"])) for a in ability_rows[r["id"]]),
+            # 6세대 게임(XY·ORAS)까지 나온 폼인지
+            "gen6": vg_order[default_form["introduced_in_version_group_id"]] <= gen6_last,
         }
     report["한국어 폼 이름이 없어 직접 적거나 규칙으로 만든 폼"] = generated_names
     by_id = {p["id"]: p for p in pokemon.values()}
+    report["6세대 종족값으로 되돌린 폼"] = sorted(by_id[int(pid)]["identifier"] for pid in stat_changes_gen6
+                                         if int(pid) in by_id)
     defaults = {p["species_id"]: p for p in pokemon.values() if p["is_default"]}
     check(sorted(defaults) == ids and all(p["id"] == s for s, p in defaults.items()),
           "모든 종에 도감번호와 같은 번호의 기본 폼이 하나씩 있어야 합니다.")
@@ -403,7 +476,8 @@ def build(source: Path, out: Path, force: bool):
         check(p["abilities"] or p["battle_only"], f"{p['identifier']}의 특성이 없습니다.")
     report["특성 정보가 없는 전투 전용 폼"] = [p["identifier"] for p in pokemon.values() if not p["abilities"]]
 
-    # 팀에 넣을 수 있는 폼: 전투 전용·사용 불가 폼과, 배틀 데이터가 기본 폼과 똑같은 겉모습만 다른 폼은 뺀다.
+    # 팀에 넣을 수 있는 폼: 6세대 게임까지 나온 폼 중 전투 전용·사용 불가 폼과,
+    # 배틀 데이터가 기본 폼과 똑같은 겉모습만 다른 폼은 뺀다.
     def battle_data(p):
         return (p["type1"], p["type2"], tuple(p["stats"]), tuple(a[1] for a in p["abilities"]))
     cosmetic = []
@@ -411,8 +485,10 @@ def build(source: Path, out: Path, force: bool):
         same_as_default = not p["is_default"] and battle_data(p) == battle_data(defaults[p["species_id"]])
         if same_as_default and not p["battle_only"]:
             cosmetic.append(p["identifier"])
-        p["selectable"] = int(not p["battle_only"] and p["identifier"] not in UNAVAILABLE and not same_as_default)
+        p["selectable"] = int(p["gen6"] and not p["battle_only"] and p["identifier"] not in UNAVAILABLE
+                              and not same_as_default)
     report["겉모습만 다른 폼(팀 선택 제외)"] = cosmetic
+    report["7세대 이후에 나온 폼(팀 선택 제외)"] = sum(not p["gen6"] for p in pokemon.values())
 
     # ── 전투 중 폼 체인지 ─────────────────────────────────────
     items_rows = src("items")
@@ -519,9 +595,26 @@ def build(source: Path, out: Path, force: bool):
             int(r["priority"]), int(r["id"] in multi_hit), int(r["generation_id"]), kind)
     report["한국어 이름이 없어 영어로 쓴 기술"] = [m for m in move_name_fallback if int(m) in moves]
 
-    # ── 습득 기술: 마지막으로 나온 일반 배틀 게임 기준 ────────────
-    version_groups = {r["id"]: r for r in src("version_groups")}
-    vg_order = {k: int(v["order"]) for k, v in version_groups.items()}
+    # 6세대 기술 값: move_changelog의 각 행은 그 버전에서 바뀌기 '전'의 값이다.
+    # 값마다 ORAS 다음에 처음 바뀐 행의 값이 6세대 값이다. 6세대까지 나온 기술만 되돌린다.
+    changelog_fields = {"type_id": 3, "power": 5, "accuracy": 6, "pp": 7, "priority": 8}   # moves 튜플 위치
+    gen6_values = {}
+    for r in sorted(src("move_changelog"), key=lambda r: vg_order[r["changed_in_version_group_id"]]):
+        mid = int(r["move_id"])
+        if mid in moves and moves[mid][10] <= GEN6 and vg_order[r["changed_in_version_group_id"]] > gen6_last:
+            for field in changelog_fields:
+                if r[field]:
+                    gen6_values.setdefault((mid, field), int(r[field]))
+    reverted = defaultdict(list)
+    for (mid, field), value in sorted(gen6_values.items()):
+        row = list(moves[mid])
+        if row[changelog_fields[field]] != value:
+            reverted[mid].append(f"{field} {row[changelog_fields[field]]}→{value}")
+            row[changelog_fields[field]] = value
+            moves[mid] = tuple(row)
+    report["6세대 값으로 되돌린 기술"] = [f"{moves[m][1]}: {', '.join(v)}" for m, v in sorted(reverted.items())]
+
+    # ── 습득 기술 ──────────────────────────────────────────────
     learn = defaultdict(lambda: defaultdict(set))   # pokemon_id → version_group_id → moves
     with open(source / "pokemon_moves.csv", encoding="utf-8", newline="") as file:
         for r in csv.DictReader(file):
@@ -530,16 +623,57 @@ def build(source: Path, out: Path, force: bool):
             move_id = int(r["move_id"])
             if move_id in moves:
                 learn[int(r["pokemon_id"])][r["version_group_id"]].add(move_id)
+    def gen6_learn(pid):
+        return set().union(*(learn[pid][g] for g in gen6_vgs if g in learn[pid]))
+
+    gen6_game = "+".join(GEN6_VERSION_GROUPS)
     learnsets, learnset_game = {}, {}
+    borrowed = []
     for p in pokemon.values():
         if p["battle_only"]:
             continue
+        # 6세대 폼: XY·ORAS 습득 기술을 합친다. 폼 자체의 기록이 없으면 같은 종 기본 폼의 기술을 쓴다.
+        if p["gen6"]:
+            own = gen6_learn(p["id"])
+            learned = own or gen6_learn(defaults[p["species_id"]]["id"])
+            if learned:
+                if not own:
+                    borrowed.append(p["identifier"])
+                learnsets[p["id"]] = learned
+                learnset_game[p["id"]] = gen6_game
+                continue
+        # 6세대에 없던 폼(팀에 넣을 수 없음): 마지막으로 나온 일반 배틀 게임 기준
         games = learn[p["id"]]
         check(games, f"{p['identifier']}의 습득 기술이 없습니다.")
         standard = [g for g in games if version_groups[g]["identifier"] not in SPIN_OFF_VERSION_GROUPS]
         latest = max(standard or games, key=lambda g: vg_order[g])
         learnsets[p["id"]] = games[latest]
         learnset_game[p["id"]] = version_groups[latest]["identifier"]
+    report["6세대 습득 기술 기록이 없어 기본 폼의 기술을 쓴 폼"] = borrowed
+    report["6세대 폼인데 6세대 습득 기술이 없는 폼"] = [p["identifier"] for p in pokemon.values()
+                                           if p["selectable"] and learnset_game[p["id"]] != gen6_game]
+
+    # 진화 전 단계의 기술: 진화 전 폼이 배우는 기술(레벨업·기술머신·알 기술 등)은 진화한 뒤에도 쓸 수 있다.
+    # 6세대 습득 기술끼리만 합친다. 예: 리자몽은 파이리의 알 기술인 용의춤·배북도 배운다.
+    parents = defaultdict(set)
+    for a, b in evolutions:
+        parents[b].add(a)
+
+    def ancestors(pid):
+        found, stack = set(), [pid]
+        while stack:
+            for parent in parents[stack.pop()]:
+                if parent not in found:
+                    found.add(parent)
+                    stack.append(parent)
+        return found
+
+    gen6_learnsets = {pid for pid, game in learnset_game.items() if game == gen6_game}
+    inherited = {pid: set().union(*(learnsets[a] for a in ancestors(pid) if a in gen6_learnsets)) - learnsets[pid]
+                 for pid in gen6_learnsets}
+    for pid, extra in inherited.items():
+        learnsets[pid] |= extra
+    report["진화 전 단계에서 물려받은 습득 기술 수"] = sum(len(extra) for extra in inherited.values())
     # 전투 전용 폼은 원래 폼의 기술을 그대로 쓴다. 원래 폼도 전투 전용이면(테라파고스) 그 폼이 먼저 정해져야 한다.
     pending = list(form_changes)
     while pending:
@@ -587,11 +721,69 @@ def build(source: Path, out: Path, force: bool):
                           int(r["fling_power"]) if r["fling_power"] else None, int(holdable)))
     report["한국어 이름이 없어 영어로 쓴 도구"] = [i[1] for i in items if str(i[0]) in item_fallback]
 
+    # ── 기술 부가 효과 (move_meta) ─────────────────────────────
+    meta_categories = {r["id"]: r["identifier"] for r in src("move_meta_categories")}
+    ailment_names = {r["id"]: r["identifier"] for r in src("move_meta_ailments")}
+    target_names = {r["id"]: r["identifier"] for r in src("move_targets")}
+    stat_names = {r["id"]: r["identifier"] for r in src("stats")}
+    move_targets = {int(r["id"]): target_names[r["target_id"]] for r in moves_rows if int(r["id"]) in moves}
+    optional = lambda value: int(value) if value else None
+    move_meta = {}
+    for r in src("move_meta"):
+        mid = int(r["move_id"])
+        if mid not in moves:
+            continue
+        ailment = ailment_names[r["meta_ailment_id"]]
+        move_meta[mid] = (mid, meta_categories[r["meta_category_id"]], move_targets[mid],
+                          None if ailment in ("none", "unknown") else ailment, int(r["ailment_chance"]),
+                          optional(r["min_hits"]), optional(r["max_hits"]),
+                          optional(r["min_turns"]), optional(r["max_turns"]),
+                          int(r["drain"]), int(r["healing"]), int(r["crit_rate"]),
+                          int(r["flinch_chance"]), int(r["stat_chance"]))
+
+    # 능력치 변화의 대상: 공격 후 자신의 능력치가 바뀌는 기술(damage-raise, 예: 인파이트)은 자신,
+    # 공격 후 상대 능력치를 내리는 기술(damage-lower)과 뽐내기류(swagger)는 상대,
+    # 나머지는 기술의 대상이 자신·우리 편이면 자신, 아니면 상대다.
+    stat_changes = []
+    for r in src("move_meta_stat_changes"):
+        mid = int(r["move_id"])
+        if mid not in moves:
+            continue
+        stat = stat_names[r["stat_id"]]
+        check(stat in STAT_IDENTIFIERS, f"알 수 없는 능력치 변화: 기술 {mid}, {stat}")
+        meta = move_meta.get(mid)
+        category = meta[1] if meta else None
+        if category == "damage-raise":
+            target = "self"
+        elif category in ("damage-lower", "swagger"):
+            target = "opponent"
+        else:
+            target = "self" if move_targets[mid] in SELF_TARGETS else "opponent"
+        stat_changes.append((mid, stat, int(r["change"]), (meta[13] if meta else 0) or 100, target))
+
+    # ── 기술 플래그 (move_flag_map) ───────────────────────────
+    flag_identifiers = {r["id"]: r["identifier"] for r in src("move_flags")}
+    move_flags = sorted({(int(r["move_id"]), flag_identifiers[r["move_flag_id"]]) for r in src("move_flag_map")
+                         if int(r["move_id"]) in moves})
+
     # ── 프로젝트 전용 데이터 ──────────────────────────────────
     statuses = [(int(r["status_id"]), r["code"], r["name"]) for r in read_csv(CUSTOM_DIR / "status_conditions.csv")]
     status_effects = [(int(r["move_id"]), int(r["status_id"]), float(r["chance"]), r["target"], r["timing"],
                        int(r["effect_group"])) for r in read_csv(CUSTOM_DIR / "move_status_effects.csv")]
     check(all(e[0] in moves for e in status_effects), "상태이상 효과의 기술 번호가 기술 목록에 없습니다.")
+
+    # 기술 1~559번의 상태이상은 위 CSV에서 직접 정리한 값을 쓰고, 560번 이후는 move_meta의 상태이상으로 채운다.
+    # 이 게임의 상태이상(마비~헤롱헤롱)만 넣으며, 상대에게 적중했을 때(on_hit) 거는 것으로 본다.
+    status_ids = {code: status_id for status_id, code, _ in statuses}
+    custom_moves = {e[0] for e in status_effects}
+    auto_status = []
+    for mid, meta in sorted(move_meta.items()):
+        if mid < AUTO_STATUS_FROM or mid in custom_moves or mid in CONDITIONAL_AILMENT_MOVES:
+            continue
+        if meta[3] in status_ids:
+            status_effects.append((mid, status_ids[meta[3]], float(meta[4] or 100), "opponent", "on_hit", 0))
+            auto_status.append(f"{moves[mid][1]}({meta[3]} {meta[4] or 100}%)")
+    report["move_meta로 채운 상태이상 효과 (560번 이후)"] = auto_status
 
     # ── 저장 ──────────────────────────────────────────────────
     if out.exists() and not force:
@@ -625,13 +817,16 @@ def build(source: Path, out: Path, force: bool):
             (pid, m) for pid, ms in learnsets.items() for m in ms))
         db.executemany("INSERT INTO StatusCondition VALUES (?, ?, ?)", statuses)
         db.executemany("INSERT INTO MoveStatusEffect VALUES (?, ?, ?, ?, ?, ?)", status_effects)
+        db.executemany(f"INSERT INTO MoveMeta VALUES ({", ".join("?" * 14)})", sorted(move_meta.values()))
+        db.executemany("INSERT INTO MoveStatChange VALUES (?, ?, ?, ?, ?)", sorted(stat_changes))
+        db.executemany("INSERT INTO MoveFlag VALUES (?, ?)", move_flags)
         db.commit()
         check(db.execute("PRAGMA integrity_check").fetchone()[0] == "ok", "SQLite 무결성 검사 실패")
         check(not db.execute("PRAGMA foreign_key_check").fetchall(), "외래 키 검사 실패")
         counts = {t: db.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in (
             "PokemonSpecies", "Pokemon", "PokemonEvolution", "PokemonFormChange", "Ability", "PokemonAbility",
             "Item", "PokemonMove", "PokemonLearnset", "Type", "TypeEffectiveness", "StatusCondition",
-            "MoveStatusEffect")}
+            "MoveStatusEffect", "MoveMeta", "MoveStatChange", "MoveFlag")}
         counts["팀에 넣을 수 있는 폼"] = db.execute("SELECT COUNT(*) FROM Pokemon WHERE is_selectable = 1").fetchone()[0]
         counts["폼 종류별"] = dict(db.execute("SELECT form_kind, COUNT(*) FROM Pokemon GROUP BY form_kind").fetchall())
     finally:
