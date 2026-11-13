@@ -84,38 +84,34 @@ class Program
     {
         ISoundManager sound = SoundManager.Instance;
         ClientState state = new NicknameState();
-        if (state.BgmPath is string initialBgm)
+        string? playingBgm = state.BgmPath;
+        string? playingBgmOverride = null;
+        if (playingBgm is string initialBgm)
             sound.PlayBgm(initialBgm);
         state.ShowMenu();
 
         await foreach (ClientEvent clientEvent in events.ReadAllAsync(cancellationToken))
         {
+            bool redrawMenu = true;
             switch (clientEvent)
             {
                 case AudioUpdate:
                     sound.Update();
                     state.OnFrame();
-                    continue;
+                    redrawMenu = false;
+                    break;
                 case TimerTick:
                     // 화면 전체를 다시 그리지 않고 남은 시간 표시만 고친다. 입력 중인 글자는 그대로 둔다.
                     state.UpdateTimer();
-                    continue;
+                    redrawMenu = false;
+                    break;
                 case UserInput input:
                     if (input.Text == null ||
                         !await state.HandleCommand(input.Text, writer, cancellationToken))
                         return true;
                     break;
                 case ServerMessage message:
-                    ClientState nextState = state.HandleServerMessage(message.Text);
-                    // 상태 변경 시 bgm 변경
-                    if (nextState.BgmPath != state.BgmPath)
-                    {
-                        if (nextState.BgmPath is string nextBgm)
-                            sound.PlayBgm(nextBgm);
-                        else
-                            sound.StopBgm();
-                    }
-                    state = nextState;
+                    state = state.HandleServerMessage(message.Text);
                     break;
                 case ConnectionClosed closed:
                     ConsoleRenderThreads.Flush();
@@ -125,8 +121,29 @@ class Program
                     return false;
             }
 
+            // 같은 상태 객체 안에서 선택·전투 단계가 바뀌어도 실제 재생 중인 곡과 비교한다.
+            string? nextBgm = state.BgmPath;
+            if (nextBgm != playingBgm)
+            {
+                if (nextBgm != null)
+                    sound.PlayBgm(nextBgm);
+                else
+                    sound.StopBgm();
+                playingBgm = nextBgm;
+                playingBgmOverride = null; // 기본 곡을 바꾸면 덮어 재생하던 곡도 함께 정리된다.
+            }
+            string? nextBgmOverride = state.BgmOverridePath;
+            if (nextBgmOverride != playingBgmOverride)
+            {
+                if (nextBgmOverride != null)
+                    sound.PlayBgmOverride(nextBgmOverride);
+                else
+                    sound.StopBgmOverride();
+                playingBgmOverride = nextBgmOverride;
+            }
+
             // 게임 상태는 이 루프에서만 변경한다. 전투 출력에는 시점별 복사본을 전달한다.
-            state.ShowMenu();
+            if (redrawMenu) state.ShowMenu();
         }
 
         return false;

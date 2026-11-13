@@ -13,6 +13,8 @@ sealed class SoundManager : ISoundManager
     public const string Faint = "faint";
     public const string HealHp = "heal_hp";
     public const string HeldItemActivate = "held_item_activate";
+    public const string PokeballThrow = "pokeball_throw";
+    public const string PokeballRelease = "pokeball_release";
     public const string StatFall = "stat_fall";
     public const string StatUp = "stat_up";
     public const string StatusBurned = "status_burned";
@@ -58,6 +60,11 @@ sealed class SoundManager : ISoundManager
     private readonly Dictionary<string, FMOD.Channel> playingSounds = new(StringComparer.Ordinal);
     private readonly Dictionary<string, (string FirstId, FMOD.Channel Channel)> pendingSounds = new(StringComparer.Ordinal);
     private FMOD.Sound bgm;
+    private FMOD.Channel bgmChannel;
+    private FMOD.Sound bgmOverride;
+    private FMOD.Channel bgmOverrideChannel;
+    private long? bgmFadeStartedAt;
+    private int bgmFadeMilliseconds;
     private bool disposed;
 
     private SoundManager(int maxChannels)
@@ -69,6 +76,7 @@ sealed class SoundManager : ISoundManager
             Check(system.init(maxChannels, FMOD.INITFLAGS.NORMAL, IntPtr.Zero));
             Check(system.getMasterChannelGroup(out masterGroup));
             Check(system.createChannelGroup("BGM", out bgmGroup));
+            Check(bgmGroup.setVolume(0.7f));
             Check(system.createChannelGroup("Sound", out soundGroup));
             Check(masterGroup.addGroup(bgmGroup));
             Check(masterGroup.addGroup(soundGroup));
@@ -80,6 +88,8 @@ sealed class SoundManager : ISoundManager
             LoadSound(Faint, Path.Combine("resources", "sounds", "In-Battle Faint No Health.mp3"));
             LoadSound(HealHp, Path.Combine("resources", "sounds", "In-Battle Heal HP Restore.mp3"));
             LoadSound(HeldItemActivate, Path.Combine("resources", "sounds", "In-Battle Held Item Activate.mp3"));
+            LoadSound(PokeballThrow, Path.Combine("resources", "sounds", "pokeball-throw.mp3"));
+            LoadSound(PokeballRelease, Path.Combine("resources", "sounds", "In-Battle Recall Switch Pokeball.mp3"));
             LoadSound(StatFall, Path.Combine("resources", "sounds", "Stat Fall Down.mp3"));
             LoadSound(StatUp, Path.Combine("resources", "sounds", "Stat Rise Up.mp3"));
             LoadSound(StatusBurned, Path.Combine("resources", "sounds", "Status Burned.mp3"));
@@ -165,7 +175,7 @@ sealed class SoundManager : ISoundManager
         try
         {
             StopBgm();
-            Check(system.playSound(nextBgm, bgmGroup, false, out _));
+            Check(system.playSound(nextBgm, bgmGroup, false, out bgmChannel));
             bgm = nextBgm;
         }
         catch
@@ -175,10 +185,69 @@ sealed class SoundManager : ISoundManager
         }
     }
 
+    /// <summary>기본 BGM의 재생 위치는 유지하고 음소거한 뒤 다른 BGM을 즉시 반복 재생한다.</summary>
+    public void PlayBgmOverride(string path)
+    {
+        ThrowIfDisposed();
+        if (!bgm.hasHandle())
+            throw new InvalidOperationException("먼저 기본 BGM을 재생해야 합니다.");
+        Check(system.createStream(ResolvePath(path), FMOD.MODE._2D | FMOD.MODE.LOOP_NORMAL, out var nextBgm));
+        FMOD.Channel nextChannel = default;
+        try
+        {
+            Check(system.playSound(nextBgm, bgmGroup, true, out nextChannel));
+            ReleaseBgmOverride();
+            bgmFadeStartedAt = null;
+            Check(bgmChannel.setVolume(0));
+            Check(nextChannel.setPaused(false));
+            bgmOverride = nextBgm;
+            bgmOverrideChannel = nextChannel;
+        }
+        catch
+        {
+            if (nextChannel.hasHandle()) nextChannel.stop();
+            nextBgm.release();
+            bgmChannel.setVolume(1);
+            throw;
+        }
+    }
+
+    /// <summary>덮어 재생하던 곡을 즉시 끄고 기본 BGM의 볼륨을 0에서 1로 복구한다.</summary>
+    public void StopBgmOverride(int fadeInMilliseconds = 1000)
+    {
+        ThrowIfDisposed();
+        ArgumentOutOfRangeException.ThrowIfNegative(fadeInMilliseconds);
+        if (!bgmOverride.hasHandle()) return;
+        ReleaseBgmOverride();
+        if (fadeInMilliseconds == 0)
+        {
+            Check(bgmChannel.setVolume(1));
+            bgmFadeStartedAt = null;
+        }
+        else
+        {
+            Check(bgmChannel.setVolume(0));
+            bgmFadeMilliseconds = fadeInMilliseconds;
+            bgmFadeStartedAt = Environment.TickCount64;
+        }
+    }
+
+    private void ReleaseBgmOverride()
+    {
+        if (!bgmOverride.hasHandle()) return;
+        Check(bgmOverrideChannel.stop());
+        bgmOverrideChannel.clearHandle();
+        Check(bgmOverride.release());
+        bgmOverride.clearHandle();
+    }
+
     public void StopBgm()
     {
         ThrowIfDisposed();
+        bgmFadeStartedAt = null;
+        ReleaseBgmOverride();
         Check(bgmGroup.stop());
+        bgmChannel.clearHandle();
         if (bgm.hasHandle())
         {
             Check(bgm.release());
@@ -202,6 +271,12 @@ sealed class SoundManager : ISoundManager
     public void Update()
     {
         ThrowIfDisposed();
+        if (bgmFadeStartedAt is long startedAt)
+        {
+            float progress = Math.Clamp((Environment.TickCount64 - startedAt) / (float)bgmFadeMilliseconds, 0, 1);
+            Check(bgmChannel.setVolume(progress));
+            if (progress >= 1) bgmFadeStartedAt = null;
+        }
         Check(system.update());
         foreach (string id in playingSounds.Keys.ToArray())
             if (!IsPlaying(id, playingSounds[id]))
@@ -225,6 +300,7 @@ sealed class SoundManager : ISoundManager
 
         // 일부 해제가 실패해도 나머지 자원의 해제를 시도한다.
         if (masterGroup.hasHandle()) masterGroup.stop();
+        if (bgmOverride.hasHandle()) bgmOverride.release();
         if (bgm.hasHandle()) bgm.release();
         foreach (var sound in sounds.Values)
             sound.release();
@@ -282,6 +358,8 @@ sealed class SoundManager : ISoundManager
         public SoundPlaybackState GetSoundState(string id) => SoundPlaybackState.Stopped;
         public void StopSound(string id) { }
         public void PlayBgm(string path, bool loop = true) { }
+        public void PlayBgmOverride(string path) { }
+        public void StopBgmOverride(int fadeInMilliseconds = 1000) { }
         public void StopBgm() { }
         public void StopAll() { }
         public void SetMasterVolume(float volume) { }

@@ -6,6 +6,7 @@ partial class RoomManager
 {
     private const int TeamSize = 3;
     private const int MaxNicknameLength = 8;
+    private const int MaxSelectableSpeciesId = 905;
 
     private readonly GameData data;
     private readonly string catalogMessage;     // POKEMON_CATALOG <Brotli로 압축한 JSON의 Base64>
@@ -19,8 +20,9 @@ partial class RoomManager
     public RoomManager(GameData data)
     {
         this.data = data;
-        // 팀에 넣을 수 있는 폼만 도감번호 순으로 보낸다. 같은 종에 고를 수 있는 폼이 여럿이면 폼 이름을 붙인다.
-        var selectable = data.PokemonById.Values.Where(p => p.IsSelectable)
+        // 전국도감 905번까지 팀에 넣을 수 있는 폼만 보낸다. 폼 번호가 아닌 종 번호로 제한한다.
+        var selectable = data.PokemonById.Values
+            .Where(p => p.IsSelectable && p.SpeciesId <= MaxSelectableSpeciesId)
             .OrderBy(p => p.SpeciesId).ThenBy(p => p.Id).ToArray();
         var formCount = selectable.CountBy(p => p.SpeciesId).ToDictionary();
         var pokemon = selectable
@@ -705,6 +707,7 @@ partial class RoomManager
 
     private bool IsValidSelection(PokemonSelection selection) =>
         data.PokemonById.TryGetValue(selection.PokemonId, out PokemonInfo? info) && info.IsSelectable &&
+        info.SpeciesId <= MaxSelectableSpeciesId &&
         selection.MoveIds is { Length: 4 } ids && ids.Distinct().Count() == 4 &&
         ids.All(id => data.LearnableMovesByPokemonId[selection.PokemonId].Contains(id));
 

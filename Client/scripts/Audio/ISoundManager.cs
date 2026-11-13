@@ -10,6 +10,8 @@ interface ISoundManager : IDisposable
     SoundPlaybackState GetSoundState(string id);
     void StopSound(string id);
     void PlayBgm(string path, bool loop = true);
+    void PlayBgmOverride(string path);
+    void StopBgmOverride(int fadeInMilliseconds = 1000);
     void StopBgm();
     void StopAll();
     void SetMasterVolume(float volume);
