@@ -12,7 +12,7 @@ static class AttackImageRenderer
         string path = Path.Combine(AppContext.BaseDirectory, "resources", folder, fileName);
         if (images.TryGetValue(path, out var image)) return image;
         image = File.Exists(path)
-            ? File.ReadAllLines(path, Encoding.UTF8).Select(line => PokemonRenderer.Parse(line).ToArray()).ToArray()
+            ? PokemonRenderer.ParseLines(File.ReadAllLines(path, Encoding.UTF8)).Select(row => row.ToArray()).ToArray()
             : [];
         images[path] = image;
         return image;
@@ -27,13 +27,27 @@ static class AttackImageRenderer
         int centerX, int centerY, int width, int top, int bottom) =>
         GetCells(Load("effect_scripts", "heal_image.txt"), centerX, centerY, false, width, top, bottom);
 
+    internal static IEnumerable<(int X, int Y, string Ansi, char Character)> GetPokeballCells(
+        int centerX, int centerY, bool flip, int width, int top, int bottom, int maxRows) =>
+        GetCells(Load("effect_scripts", "pokeball_image.txt"), centerX, centerY, flip,
+            width, top, bottom, maxRows);
+
+    internal static IEnumerable<(int X, int Y, string Ansi, char Character)> GetResultCells(
+        string result, int width, int top, int bottom)
+    {
+        string? fileName = result switch { "WIN" => "victory_image.txt", "LOSE" => "loss_image.txt", _ => null };
+        return fileName == null ? [] : GetCells(Load("effect_scripts", fileName),
+            width / 2, (top + bottom) / 2, false, width, top, bottom);
+    }
+
     private static IEnumerable<(int X, int Y, string Ansi, char Character)> GetCells(
-        (string Ansi, char Character)[][] image, int centerX, int centerY, bool flip, int width, int top, int bottom)
+        (string Ansi, char Character)[][] image, int centerX, int centerY, bool flip, int width, int top, int bottom,
+        int maxRows = int.MaxValue)
     {
         if (image.Length == 0 || bottom <= top || width < 3) yield break;
         int sourcePixels = image.Max(row => row.Length) / 2;
         if (sourcePixels == 0) yield break;
-        double scale = Math.Min(1, Math.Min((double)(bottom - top) / image.Length,
+        double scale = Math.Min(1, Math.Min((double)Math.Min(bottom - top, maxRows) / image.Length,
             (double)(width - 1) / (sourcePixels * 2)));
         int rows = Math.Max(1, (int)(image.Length * scale));
         int pixels = Math.Max(1, (int)(sourcePixels * scale));
@@ -72,6 +86,13 @@ static class AttackImageRenderer
     public static void DrawHeal(int centerX, int centerY, int width, int top, int bottom, BattleSpriteBuffer buffer)
     {
         foreach (var cell in GetHealCells(centerX, centerY, width, top, bottom))
+            buffer.SetPixel(cell.X, cell.Y, cell.Ansi, cell.Character);
+    }
+
+    public static void DrawPokeball(int centerX, int centerY, bool flip, int width, int top, int bottom,
+        int maxRows, BattleSpriteBuffer buffer)
+    {
+        foreach (var cell in GetPokeballCells(centerX, centerY, flip, width, top, bottom, maxRows))
             buffer.SetPixel(cell.X, cell.Y, cell.Ansi, cell.Character);
     }
 }

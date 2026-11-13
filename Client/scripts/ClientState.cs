@@ -3,6 +3,7 @@ namespace Client;
 abstract class ClientState
 {
     public virtual string? BgmPath => null;
+    public virtual string? BgmOverridePath => null;
     protected abstract string Menu { get; }
     protected string? Notification { get; set; }
 

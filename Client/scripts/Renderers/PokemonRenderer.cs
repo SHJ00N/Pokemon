@@ -32,12 +32,14 @@ static class PokemonRenderer
         int sourceRows = source.Length;
         while (sourceRows > 1 && string.IsNullOrWhiteSpace(AnsiCode.Replace(source[sourceRows - 1], "")))
             sourceRows--;
+        // 원본은 줄바꿈 뒤에도 색상을 유지한다. 축소로 생략되는 줄의 색상 변경도 먼저 해석한다.
+        var sourceCells = ParseLines(source);
         int count = Math.Min(sourceRows, maxRows);
         var lines = new string[count];
         for (int row = 0; row < count; row++)
         {
             int index = count == 1 ? 0 : (int)Math.Round((double)row * (sourceRows - 1) / (count - 1));
-            List<(string Ansi, char Character)> cells = Parse(source[index]);
+            List<(string Ansi, char Character)> cells = sourceCells[index];
             if (flip) cells.Reverse();
             var line = new StringBuilder();
             foreach (var cell in cells.Take(maxColumns))
@@ -105,8 +107,22 @@ static class PokemonRenderer
 
     internal static List<(string Ansi, char Character)> Parse(string line)
     {
+        string ansi = "\x1b[0m";
+        return Parse(line, ref ansi);
+    }
+
+    internal static List<(string Ansi, char Character)>[] ParseLines(IEnumerable<string> lines)
+    {
+        string ansi = "\x1b[0m";
+        var rows = new List<List<(string Ansi, char Character)>>();
+        foreach (string line in lines)
+            rows.Add(Parse(line, ref ansi));
+        return rows.ToArray();
+    }
+
+    private static List<(string Ansi, char Character)> Parse(string line, ref string ansi)
+    {
         var cells = new List<(string, char)>();
-        string ansi = "";
         for (int index = 0; index < line.Length;)
         {
             if (line[index] == '\x1b')

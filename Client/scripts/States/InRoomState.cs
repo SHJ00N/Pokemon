@@ -2,6 +2,8 @@ namespace Client;
 
 sealed class InRoomState : ClientState
 {
+    public override string BgmPath => LobbyState.TitleBgm;
+
     private readonly int roomId;
     private readonly bool isHost;       // 내가 방장인지. 플레이어 목록에서 내 이름 옆에 (나)를 붙인다.
     private sealed record RoomPlayer(string Name, bool IsReady);

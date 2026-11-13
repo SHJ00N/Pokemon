@@ -137,7 +137,7 @@ static class InGameRenderer
         int maxRows = Math.Max(1, height - BattleInformationRows);
         string[] player = PokemonRenderer.Load(active.Pokemon.PokemonId, active.Pokemon.SpeciesId, maxRows, columns, flip: true);
         string[] opponent = PokemonRenderer.Load(battle.Opponent.PokemonId, battle.Opponent.SpeciesId, maxRows, columns, flip: false);
-        int statusY = Math.Max(player.Length, opponent.Length) + 4;
+        int statusY = GetSpritePositions(player.Length, opponent.Length).Bottom + 2;
         var layout = (width, height, statusY);
         if (battleLayout != layout)
         {
@@ -170,12 +170,11 @@ static class InGameRenderer
         Math.Max(1, Console.BufferWidth / 2 - 4), flip: false).Length;
 
     // Animation frames update only the sprite area, leaving menus and logs steady.
-    public static void DrawBattleFrame(BattleView battle, int playerJumpOffset, int opponentJumpOffset,
-        bool flashPlayer, bool flashOpponent,
-        TypeView? effectType, bool effectFromPlayer, double effectProgress,
-        double playerFaintProgress = 0, double opponentFaintProgress = 0,
-        StatusAnimation.Effect? statusEffect = null, bool? healingOnPlayer = null)
+    public static void DrawBattleFrame(BattleView battle, BattleAnimationFrame frame)
     {
+        var (playerJumpOffset, opponentJumpOffset, flashPlayer, flashOpponent,
+            effectType, effectFromPlayer, effectProgress, playerFaintProgress, opponentFaintProgress,
+            statusEffect, healingOnPlayer, summon, withdraw) = frame;
         int width = Console.BufferWidth;
         int height = Console.BufferHeight;
         int columns = Math.Max(1, width / 2 - 4);
@@ -184,16 +183,24 @@ static class InGameRenderer
         string[] opponent = PokemonRenderer.Load(battle.Opponent.PokemonId, battle.Opponent.SpeciesId, maxRows, columns, flip: false);
         int rightX = width - Math.Max(BattlePanelRenderer.Width,
             PokemonRenderer.GetHorizontalBounds(opponent).MaxX + 1) - 2;
+        var positions = GetSpritePositions(player.Length, opponent.Length);
+        int playerY = positions.PlayerY + playerJumpOffset;
+        int opponentY = positions.OpponentY + opponentJumpOffset;
 
         spriteBuffer.BeginFrame();
-        spriteBuffer.AddImage(player, 2, 2 + playerJumpOffset, flashPlayer,
-            (int)Math.Round(Math.Clamp(playerFaintProgress, 0, 1) * player.Length));
-        spriteBuffer.AddImage(opponent, rightX, 2 + opponentJumpOffset, flashOpponent,
-            (int)Math.Round(Math.Clamp(opponentFaintProgress, 0, 1) * opponent.Length));
+        if (withdraw is { } exit)
+            DrawWithdrawFrame(spriteBuffer, player, opponent, rightX, width, exit, playerFaintProgress, opponentFaintProgress);
+        else if (summon is { } entry)
+            DrawSummonFrame(spriteBuffer, player, opponent, rightX, width, entry, playerFaintProgress, opponentFaintProgress);
+        else
+        {
+            DrawPokemonSprites(spriteBuffer, player, opponent, rightX, playerJumpOffset, opponentJumpOffset,
+                flashPlayer, flashOpponent, playerFaintProgress, opponentFaintProgress);
+        }
         if (effectType != null && effectProgress is >= 0 and <= 1)
         {
             string effectColor = effectType.ColorRgb;
-            int effectBottom = 2 + Math.Max(player.Length, opponent.Length);
+            int effectBottom = positions.Bottom;
             var (_, playerMax) = PokemonRenderer.GetHorizontalBounds(player);
             var (opponentMin, _) = PokemonRenderer.GetHorizontalBounds(opponent);
             int playerFront = 2 + playerMax;
@@ -205,8 +212,9 @@ static class InGameRenderer
             int end = effectFromPlayer ? leftEnd : leftStart;
             double travelProgress = Math.Clamp(effectProgress / 0.78, 0, 1);
             int x = start + (int)Math.Round((end - start) * travelProgress);
-            int targetOffset = effectFromPlayer ? opponentJumpOffset : playerJumpOffset;
-            int y = Math.Max(4, 2 + Math.Max(player.Length, opponent.Length) / 2 + targetOffset);
+            int sourceY = effectFromPlayer ? playerY + player.Length / 2 : opponentY + opponent.Length / 2;
+            int targetY = effectFromPlayer ? opponentY + opponent.Length / 2 : playerY + player.Length / 2;
+            int y = Math.Max(2, (int)Math.Round(sourceY + (targetY - sourceY) * travelProgress));
             y += TypeMotionOffset(effectType.Name, effectProgress);
             if (x >= 0 && x < width - 1 && y < height)
             {
@@ -235,17 +243,84 @@ static class InGameRenderer
         {
             string[] target = status.OnPlayer ? player : opponent;
             int targetX = status.OnPlayer ? 2 : rightX;
-            int targetY = 2 + (status.OnPlayer ? playerJumpOffset : opponentJumpOffset);
+            int targetY = status.OnPlayer ? playerY : opponentY;
             DrawStatusOverlay(spriteBuffer, status, target, targetX, targetY, width);
         }
         if (healingOnPlayer is bool onPlayer)
         {
             string[] target = onPlayer ? player : opponent;
             int targetX = onPlayer ? 2 : rightX;
-            int targetY = 2 + (onPlayer ? playerJumpOffset : opponentJumpOffset);
+            int targetY = onPlayer ? playerY : opponentY;
             DrawHealingOverlay(spriteBuffer, target, targetX, targetY, width);
         }
         spriteBuffer.Flush(width, height);
+    }
+
+    // 두 포켓몬의 발밑을 정보 상자 바로 위에 맞추고, 키가 작은 쪽을 아래로 내린다.
+    internal static (int PlayerY, int OpponentY, int Bottom) GetSpritePositions(int playerRows, int opponentRows)
+    {
+        int bottom = 2 + Math.Max(playerRows, opponentRows);
+        return (bottom - playerRows, bottom - opponentRows, bottom);
+    }
+
+    internal static void DrawPokemonSprites(BattleSpriteBuffer buffer, string[] player, string[] opponent,
+        int rightX, int playerJumpOffset = 0, int opponentJumpOffset = 0,
+        bool hidePlayer = false, bool hideOpponent = false,
+        double playerFaintProgress = 0, double opponentFaintProgress = 0,
+        int playerHorizontalOffset = 0, int opponentHorizontalOffset = 0)
+    {
+        var positions = GetSpritePositions(player.Length, opponent.Length);
+        buffer.AddImage(player, 2 + playerHorizontalOffset, positions.PlayerY + playerJumpOffset, hidePlayer,
+            (int)Math.Round(Math.Clamp(playerFaintProgress, 0, 1) * player.Length));
+        buffer.AddImage(opponent, rightX + opponentHorizontalOffset, positions.OpponentY + opponentJumpOffset, hideOpponent,
+            (int)Math.Round(Math.Clamp(opponentFaintProgress, 0, 1) * opponent.Length));
+    }
+
+    internal static void DrawSummonFrame(BattleSpriteBuffer buffer, string[] player, string[] opponent,
+        int rightX, int width, SummonAnimation.Frame frame,
+        double playerFaintProgress = 0, double opponentFaintProgress = 0)
+    {
+        DrawPokemonSprites(buffer, player, opponent, rightX,
+            hidePlayer: !frame.ShowPlayer, hideOpponent: !frame.ShowOpponent,
+            playerFaintProgress: playerFaintProgress, opponentFaintProgress: opponentFaintProgress);
+        if (frame.ThrowOnPlayer is not bool onPlayer || width < 3) return;
+
+        var positions = GetSpritePositions(player.Length, opponent.Length);
+        string[] target = onPlayer ? player : opponent;
+        var (minX, maxX) = PokemonRenderer.GetHorizontalBounds(target);
+        int targetX = (onPlayer ? 2 : rightX) + (minX + maxX + 1) / 2;
+        int ballRows = Math.Max(1, Math.Min(12, Math.Min(target.Length / 2, (width - 2) / 8)));
+        var position = GetSummonBallPosition(onPlayer, frame.ThrowProgress, targetX,
+            width, 2, positions.Bottom, ballRows);
+        AttackImageRenderer.DrawPokeball(position.X, position.Y, flip: !onPlayer,
+            width, 2, positions.Bottom, ballRows, buffer);
+    }
+
+    internal static void DrawWithdrawFrame(BattleSpriteBuffer buffer, string[] player, string[] opponent,
+        int rightX, int width, WithdrawAnimation.Frame frame,
+        double playerFaintProgress = 0, double opponentFaintProgress = 0)
+    {
+        double progress = Math.Clamp(frame.Progress, 0, 1);
+        int playerDistance = 2 + PokemonRenderer.GetHorizontalBounds(player).MaxX + 1;
+        int opponentDistance = Math.Max(0, width - 1 - rightX - PokemonRenderer.GetHorizontalBounds(opponent).MinX);
+        DrawPokemonSprites(buffer, player, opponent, rightX,
+            playerFaintProgress: playerFaintProgress, opponentFaintProgress: opponentFaintProgress,
+            playerHorizontalOffset: frame.OnPlayer ? -(int)Math.Round(playerDistance * progress) : 0,
+            opponentHorizontalOffset: frame.OnOpponent ? (int)Math.Round(opponentDistance * progress) : 0);
+    }
+
+    // 내 볼은 왼쪽 바깥에서 오른쪽으로, 상대 볼은 대칭 방향으로 날아와 포켓몬의 발치에 도착한다.
+    internal static (int X, int Y) GetSummonBallPosition(bool onPlayer, double progress,
+        int targetX, int width, int top, int bottom, int ballRows)
+    {
+        double t = Math.Clamp(progress, 0, 1);
+        int startX = onPlayer ? -ballRows : width - 1 + ballRows;
+        int minY = top + ballRows / 2;
+        int endY = Math.Max(minY, bottom - (ballRows + 1) / 2);
+        double space = endY - minY;
+        double startY = minY + space * 0.35;
+        double y = startY + (endY - startY) * t - 4 * space * 0.6 * t * (1 - t);
+        return ((int)Math.Round(startX + (targetX - startX) * t), (int)Math.Round(y));
     }
 
     internal static void DrawStatusOverlay(BattleSpriteBuffer buffer, StatusAnimation.Effect effect,
@@ -320,10 +395,23 @@ static class InGameRenderer
 
     private static void DrawResult(string result, string? notification)
     {
-        TextRenderer.WriteLine();
-        TextRenderer.WriteLine("  ==========================");
-        TextRenderer.WriteLine("            " + (result is "WIN" or "DRAW" ? result : "LOSE"));
-        TextRenderer.WriteLine("  ==========================");
+        int width = Console.BufferWidth, height = Console.BufferHeight;
+        var cells = AttackImageRenderer.GetResultCells(result, width, 1, Math.Max(2, height - 6)).ToArray();
+        int menuY = 3;
+        if (cells.Length > 0)
+        {
+            var buffer = new BattleSpriteBuffer();
+            foreach (var cell in cells)
+                buffer.SetPixel(cell.X, cell.Y, cell.Ansi, cell.Character);
+            TextRenderer.Write(buffer.BuildUpdate(width, height));
+            menuY = cells.Max(cell => cell.Y) + 2;
+        }
+        else
+        {
+            // 무승부나 리소스가 없는 경우에도 결과와 재도전 메뉴를 표시한다.
+            TextRenderer.At(2, 1, result == "DRAW" ? "DRAW" : result == "WIN" ? "Victory!" : "Loss...");
+        }
+        Console.SetCursorPosition(0, Math.Min(menuY, Math.Max(0, height - 4)));
         TextRenderer.WriteLine();
         TextRenderer.WriteLine("  1. 재도전  2. 나가기");
         if (notification != null)
