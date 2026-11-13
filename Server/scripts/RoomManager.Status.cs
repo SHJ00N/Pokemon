@@ -67,8 +67,8 @@ partial class RoomManager
     private void UseDamagingMove(GameRoom room, BattleSide attacker, BattleSide defender, PokemonMoveInfo move)
     {
         BattlePokemon user = attacker.Current, target = defender.Current;
-        SendMoveEffect(room, attacker, move);
         var result = CalculateDamage(attacker, defender, move);
+        SendMoveEffect(room, attacker, move, result.Supported && result.Hit ? result.Effectiveness : 0);
         LogPokemon(room, attacker, DescribeMove(user, move, result));
         if (!result.Supported || !result.Hit || result.Effectiveness == 0)
             return;
@@ -104,12 +104,14 @@ partial class RoomManager
         ApplyStatusEffects(room, attacker, defender, move, null, announceFailure: false);
     }
 
-    private void SendMoveEffect(GameRoom room, BattleSide attacker, PokemonMoveInfo move)
+    private void SendMoveEffect(GameRoom room, BattleSide attacker, PokemonMoveInfo move, double effectiveness)
     {
         string color = data.TypesById[move.TypeId].ColorRgb;
         string type = data.TypesById[move.TypeId].Name;
-        room.Host.QueueMessage($"BATTLE_EFFECT {move.TypeId} {color} {type} {(attacker == room.HostSide ? "SELF" : "OPPONENT")}");
-        room.Guest!.QueueMessage($"BATTLE_EFFECT {move.TypeId} {color} {type} {(attacker == room.GuestSide ? "SELF" : "OPPONENT")}");
+        room.Host.QueueMessage(FormattableString.Invariant(
+            $"BATTLE_EFFECT {move.TypeId} {color} {type} {(attacker == room.HostSide ? "SELF" : "OPPONENT")} {effectiveness}"));
+        room.Guest!.QueueMessage(FormattableString.Invariant(
+            $"BATTLE_EFFECT {move.TypeId} {color} {type} {(attacker == room.GuestSide ? "SELF" : "OPPONENT")} {effectiveness}"));
     }
 
     // reflected: 매직코트로 되돌아온 기술 (기술 이름 기록은 이미 남겼다)
@@ -153,6 +155,10 @@ partial class RoomManager
             return;
         }
 
+        BattlePokemon target = defender.Current;
+        int[] userStages = user.Stages.ToArray(), targetStages = target.Stages.ToArray();
+        bool userFocusEnergy = user.FocusEnergy, targetFocusEnergy = target.FocusEnergy;
+        int[] buffsBefore = GetBuffLevels(attacker);
         if (changesStats)
             UseStatChangeMove(room, attacker, defender, statChange);
         else if (SpecialMoveIds.Contains(move.Id))
@@ -161,6 +167,13 @@ partial class RoomManager
             UseHealMove(room, attacker, defender, move);
         else if (ProtectMoveIds.Contains(move.Id))
             UseProtectMove(room, attacker, move, movesLast);
+        bool userRankRaised = SendStatEffects(room, attacker, user, userStages, userFocusEnergy, move.TypeId);
+        SendStatEffects(room, defender, target, targetStages, targetFocusEnergy, move.TypeId);
+        if (!userRankRaised && ReferenceEquals(attacker.Current, user) && HasNewBuff(attacker, buffsBefore))
+        {
+            attacker.Player.QueueMessage($"BATTLE_BUFF {move.TypeId} SELF");
+            defender.Player.QueueMessage($"BATTLE_BUFF {move.TypeId} OPPONENT");
+        }
         if (causesStatus)
             ApplyStatusEffects(room, attacker, defender, move, null, announceFailure: true);
     }
@@ -177,7 +190,9 @@ partial class RoomManager
         user.Status = Sleep;
         user.SleepStart = user.SleepTurns = 3;
         user.Hp = user.MaxHp;
+        SendStatusEffect(room, side, Sleep);
         LogPokemon(room, side, $"{WithJosa(user.Info.Name, "은", "는")} 잠들어서 건강해졌다!");
+        SendHealEffect(room, side);
     }
 
     // 기술의 상태이상 효과를 적용한다. timing이 null이면 난동 종료(after_sequence)를 뺀 사용 시점 효과 전부다.
@@ -264,7 +279,10 @@ partial class RoomManager
         }
 
         if (success)
+        {
+            SendStatusEffect(room, side, code);
             LogPokemon(room, side, $"{WithJosa(target.Info.Name, "은", "는")} {text}");
+        }
         else if (announceFailure)
             LogBoth(room, side, "하지만 실패했다!");
     }
@@ -279,6 +297,7 @@ partial class RoomManager
             return;
         }
         target.DrowsyTurns = 2;
+        SendStatusEffect(room, side, Sleep);
         LogPokemon(room, side, $"{WithJosa(target.Info.Name, "은", "는")} 졸음이 오기 시작했다!");
     }
 
@@ -301,6 +320,7 @@ partial class RoomManager
         {
             if (--user.SleepTurns > 0)
             {
+                SendStatusEffect(room, side, Sleep);
                 LogPokemon(room, side, $"{subject} 쿨쿨 잠들어 있다.");
                 return false;
             }
@@ -312,6 +332,7 @@ partial class RoomManager
         {
             if (!SelfThawMoveIds.Contains(move.Id) && Random.Shared.Next(100) >= 20)
             {
+                SendStatusEffect(room, side, Freeze);
                 LogPokemon(room, side, $"{subject} 얼어붙어서 움직일 수 없다!");
                 return false;
             }
@@ -325,6 +346,7 @@ partial class RoomManager
                 LogPokemon(room, side, $"{user.Info.Name}의 혼란이 풀렸다!");
             else
             {
+                SendStatusEffect(room, side, Confusion);
                 LogPokemon(room, side, $"{subject} 혼란에 빠져 있다!");
                 // 5세대는 50% 확률로 자신을 공격한다.
                 if (Random.Shared.Next(2) == 0)
@@ -339,6 +361,7 @@ partial class RoomManager
 
         if (user.Infatuated)
         {
+            SendStatusEffect(room, side, Infatuation);
             LogPokemon(room, side, $"{subject} 헤롱헤롱해 있다!");
             if (Random.Shared.Next(2) == 0)
             {
@@ -349,6 +372,7 @@ partial class RoomManager
 
         if (user.Status == Paralysis && Random.Shared.Next(4) == 0)
         {
+            SendStatusEffect(room, side, Paralysis);
             LogPokemon(room, side, $"{subject} 몸이 저려서 움직일 수 없다!");
             return false;
         }
@@ -386,8 +410,10 @@ partial class RoomManager
                 : pokemon.MaxHp / 8;
             damage = Math.Max(1, damage);
             string cause = pokemon.Status == Burn ? "화상" : "독";
+            SendStatusEffect(room, side, pokemon.Status);
             LogPokemon(room, side, $"{WithJosa(pokemon.Info.Name, "은", "는")} {cause} 데미지를 입었다! ({damage} 데미지)");
             DealDamage(room, side, damage);
+            SendBattleState(room);
         }
 
         foreach (BattleSide side in sides)
@@ -413,6 +439,13 @@ partial class RoomManager
         LogPokemon(room, side, $"{WithJosa(pokemon.Info.Name, "이", "가")} 쓰러졌다!");
         if (side.Team.Any(member => member.Hp > 0))
             side.MustSwitch = true;
+    }
+
+    // 연출 대상 기준으로 양쪽 클라이언트의 SELF/OPPONENT를 지정한다.
+    private static void SendStatusEffect(GameRoom room, BattleSide side, string code)
+    {
+        side.Player.QueueMessage($"BATTLE_STATUS {code} SELF");
+        GetOther(room, side).Player.QueueMessage($"BATTLE_STATUS {code} OPPONENT");
     }
 
     private double TypeMultiplier(PokemonMoveInfo move, BattlePokemon defender)

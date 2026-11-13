@@ -1,9 +1,11 @@
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace Client;
 
 static class TextRenderer
 {
+    private static readonly Regex AnsiCode = new(@"\x1B\[[0-?]*[ -/]*[@-~]", RegexOptions.Compiled);
     public static void Write(string text) => Console.Write(text);
     public static void WriteLine(string text = "") => Console.WriteLine(text);
 
@@ -30,7 +32,7 @@ static class TextRenderer
     }
 
     // 터미널에 표시되는 칸 수. 한글 등 전각 문자는 두 칸이다.
-    public static int DisplayWidth(string text) => text.EnumerateRunes().Sum(Width);
+    public static int DisplayWidth(string text) => AnsiCode.Replace(text, "").EnumerateRunes().Sum(Width);
 
     // 한글 등 전각 문자는 두 칸으로 계산한다.
     public static string FitToWidth(string text, int width)

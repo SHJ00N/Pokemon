@@ -33,10 +33,13 @@ partial class RoomManager
         {
             case PainSplitMoveId:
                 // 두 포켓몬의 HP를 평균으로 맞춘다.
+                int userHpBefore = user.Hp, targetHpBefore = target.Hp;
                 int average = (user.Hp + target.Hp) / 2;
                 user.Hp = Math.Min(user.MaxHp, average);
                 target.Hp = Math.Min(target.MaxHp, average);
                 LogBoth(room, attacker, "서로의 아픔을 나눠 가졌다!");
+                if (user.Hp > userHpBefore) SendHealEffect(room, attacker);
+                if (target.Hp > targetHpBefore) SendHealEffect(room, defender);
                 break;
             case SwallowMoveId:
                 // 비축한 수만큼 회복(1개 1/4, 2개 1/2, 3개 전부)하고, 비축과 그로 오른 방어·특방을 되돌린다.
@@ -91,7 +94,14 @@ partial class RoomManager
         int healed = Math.Min(Math.Max(1, amount), pokemon.MaxHp - pokemon.Hp);
         pokemon.Hp += healed;
         LogPokemon(room, side, $"{WithJosa(pokemon.Info.Name, "은", "는")} 체력을 회복했다! (+{healed})");
+        SendHealEffect(room, side);
         return true;
+    }
+
+    private static void SendHealEffect(GameRoom room, BattleSide side)
+    {
+        side.Player.QueueMessage("BATTLE_HEAL SELF");
+        GetOther(room, side).Player.QueueMessage("BATTLE_HEAL OPPONENT");
     }
 
     // 턴 끝 회복: 희망사항 → 아쿠아링 → 뿌리박기 (독·화상 데미지보다 먼저)

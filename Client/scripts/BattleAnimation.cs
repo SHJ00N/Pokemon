@@ -9,10 +9,11 @@ sealed class BattleAnimation
     public const int FlashIntervalMilliseconds = 160;
     public const int FlashCount = 3;
     public const int HitMilliseconds = FlashIntervalMilliseconds * 2 * FlashCount;
-    private readonly Queue<(TypeView Type, bool FromPlayer)> queue = new();
-    private (TypeView Type, bool FromPlayer)? current;
+    private readonly Queue<(TypeView Type, bool FromPlayer, double Effectiveness)> queue = new();
+    private (TypeView Type, bool FromPlayer, double Effectiveness)? current;
     private long startedAt;
     private long elapsed;
+    private bool hitStarted;
 
     public bool IsBusy => current != null || queue.Count > 0;
     public TypeView? EffectType => current is { } attack && elapsed < TravelMilliseconds ? attack.Type : null;
@@ -23,17 +24,28 @@ sealed class BattleAnimation
     public bool FlashPlayer => FlashOn && !FromPlayer;
     public bool FlashOpponent => FlashOn && FromPlayer;
 
-    public void Enqueue(TypeView type, bool fromPlayer) => queue.Enqueue((type, fromPlayer));
+    public void Enqueue(TypeView type, bool fromPlayer, double effectiveness = 1) =>
+        queue.Enqueue((type, fromPlayer, effectiveness));
 
-    public void Update(long now)
+    // 양쪽 포켓몬 모두 피격 깜빡임이 시작될 때만 상성 배율을 반환한다.
+    public double? Update(long now)
     {
         if (current == null && queue.TryDequeue(out var attack))
         {
             current = attack;
             startedAt = now;
+            hitStarted = false;
         }
         elapsed = Math.Max(0, now - startedAt);
+        double? hitEffectiveness = null;
+        if (current is { } hit && !hitStarted && elapsed >= TravelMilliseconds)
+        {
+            hitStarted = true;
+            if (hit.Effectiveness > 0)
+                hitEffectiveness = hit.Effectiveness;
+        }
         if (current != null && elapsed >= TravelMilliseconds + HitMilliseconds)
             current = null;
+        return hitEffectiveness;
     }
 }

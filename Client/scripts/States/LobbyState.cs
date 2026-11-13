@@ -6,7 +6,7 @@ namespace Client;
 
 sealed class LobbyState : ClientState
 {
-    public static readonly string TitleBgm = Path.Combine("resources", "sounds", "01 Title Screen.wav");
+    public static readonly string TitleBgm = Path.Combine("resources", "sounds", "01 Title Screen.mp3");
     public override string BgmPath => TitleBgm;
 
     public static readonly string Logo = File.ReadAllText(
