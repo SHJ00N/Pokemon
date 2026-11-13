@@ -1,4 +1,4 @@
-// HP를 회복하는 변화 기술. 수치는 5세대 규칙을 따르며, 날씨가 없으므로 날씨에 따른 회복량 변화는 없다.
+// HP를 회복하는 변화 기술. 수치는 6세대 규칙을 따른다.
 partial class RoomManager
 {
     private const int RecoverMoveId = 105, SoftBoiledMoveId = 135, MilkDrinkMoveId = 208, PainSplitMoveId = 220,
@@ -22,7 +22,11 @@ partial class RoomManager
 
         if (HalfHealMoveIds.Contains(move.Id))
         {
-            if (!Heal(room, attacker, user.MaxHp / 2))
+            // 아침햇살·광합성·달빛: 쾌청이면 2/3, 비·모래바람·싸라기눈이면 1/4
+            int amount = move.Id is MorningSunMoveId or SynthesisMoveId or MoonlightMoveId && room.Weather != null
+                ? room.Weather == Sun ? user.MaxHp * 2 / 3 : user.MaxHp / 4
+                : user.MaxHp / 2;
+            if (!Heal(room, attacker, amount))
                 LogBoth(room, attacker, "하지만 실패했다!");
             else if (move.Id == RoostMoveId)
                 user.Roosting = true;   // 이번 턴이 끝날 때까지 비행 타입이 없다.
@@ -89,7 +93,8 @@ partial class RoomManager
     private static bool Heal(GameRoom room, BattleSide side, int amount)
     {
         BattlePokemon pokemon = side.Current;
-        if (pokemon.Hp == 0 || pokemon.Hp == pokemon.MaxHp)
+        // 회복봉인 중에는 HP가 회복되지 않는다.
+        if (pokemon.Hp == 0 || pokemon.Hp == pokemon.MaxHp || pokemon.HealBlockTurns > 0)
             return false;
         int healed = Math.Min(Math.Max(1, amount), pokemon.MaxHp - pokemon.Hp);
         pokemon.Hp += healed;

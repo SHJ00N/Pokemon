@@ -5,16 +5,13 @@ sealed class InGameState : ClientState
 {
     public override bool HandleCommand(ClientSession session, RoomManager rooms, string command)
     {
-        // 전투 중 기술 사용: USE_MOVE <기술 슬롯 1~4> [배턴터치로 내보낼 팀 번호 1~3]
+        // 전투 중 기술 사용: USE_MOVE <기술 슬롯 1~4>. 배턴터치·유턴 등의 교체할 포켓몬은 턴 도중에 SWITCH로 고른다.
         if (command.StartsWith("USE_MOVE "))
         {
-            string[] parts = command[9..].Split(' ');
-            if (parts.Length > 2 || !int.TryParse(parts[0], out int slot) || slot is < 1 or > 4)
+            if (!int.TryParse(command[9..], out int slot) || slot is < 1 or > 4)
                 session.QueueMessage("ERROR 기술 번호는 1~4입니다.");
-            else if (parts.Length == 2 && (!int.TryParse(parts[1], out int teamSlot) || teamSlot is < 1 or > 3))
-                session.QueueMessage("ERROR 팀 번호는 1~3입니다.");
             else
-                rooms.UseMove(session, slot, parts.Length == 2 ? int.Parse(parts[1]) : null);
+                rooms.UseMove(session, slot);
             return true;
         }
 

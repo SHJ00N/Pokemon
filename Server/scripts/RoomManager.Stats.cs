@@ -1,70 +1,33 @@
-// 능력치 랭크, 급소, 우리 편·필드 효과를 다루는 기술. 수치는 5세대 규칙을 따른다.
-// 능력치 변화 데이터는 아직 DB에 없어서 여기에 직접 적었다. 나중에 DB 테이블로 옮긴다. (README "남은 작업")
+// 능력치 랭크, 급소, 우리 편·필드 효과를 다루는 기술. 수치는 6세대 규칙을 따른다.
+// 기술의 능력치 변화(칼춤 공격 +2 등)는 DB의 MoveStatChange에서 읽는다.
 partial class RoomManager
 {
     private static readonly string[] StatNames = ["공격", "방어", "특수공격", "특수방어", "스피드", "명중률", "회피율"];
 
-    // 기술 번호 → 자신에게 쓰는지(Self), 바뀌는 능력치와 단계
-    private static readonly Dictionary<int, (bool Self, (Stat Stat, int Stages)[] Changes)> StatChangeMoves = new()
+    // DB(MoveStatChange)의 능력치 이름 → Stat
+    private static readonly Dictionary<string, Stat> StatByIdentifier = new()
     {
-        // 자신의 능력치를 올리는 기술
-        [14] = (true, [(Stat.Attack, 2)]),                                           // 칼춤
-        [417] = (true, [(Stat.SpAttack, 2)]),                                        // 나쁜음모
-        [334] = (true, [(Stat.Defense, 2)]),                                         // 철벽
-        [133] = (true, [(Stat.SpDefense, 2)]),                                       // 망각술
-        [97] = (true, [(Stat.Speed, 2)]),                                            // 고속이동
-        [104] = (true, [(Stat.Evasion, 1)]),                                         // 그림자분신
-        [347] = (true, [(Stat.SpAttack, 1), (Stat.SpDefense, 1)]),                   // 명상
-        [339] = (true, [(Stat.Attack, 1), (Stat.Defense, 1)]),                       // 벌크업
-        [349] = (true, [(Stat.Attack, 1), (Stat.Speed, 1)]),                         // 용의춤
-        [74] = (true, [(Stat.Attack, 1), (Stat.SpAttack, 1)]),                       // 성장 (날씨가 없으므로 항상 +1)
-        [504] = (true, [(Stat.Attack, 2), (Stat.SpAttack, 2), (Stat.Speed, 2),
-                        (Stat.Defense, -1), (Stat.SpDefense, -1)]),                  // 껍질깨기
-        [322] = (true, [(Stat.Defense, 1), (Stat.SpDefense, 1)]),                    // 코스믹파워
-        [489] = (true, [(Stat.Attack, 1), (Stat.Defense, 1), (Stat.Accuracy, 1)]),   // 똬리틀기
-        [96] = (true, [(Stat.Attack, 1)]),                                           // 요가포즈
-        [106] = (true, [(Stat.Defense, 1)]),                                         // 단단해지기
-        [107] = (true, [(Stat.Evasion, 2)]),                                         // 작아지기 (5세대 +2)
-        [110] = (true, [(Stat.Defense, 1)]),                                         // 껍질에숨기
-        [111] = (true, [(Stat.Defense, 1)]),                                         // 웅크리기
-        [112] = (true, [(Stat.Defense, 2)]),                                         // 배리어
-        [151] = (true, [(Stat.Defense, 2)]),                                         // 녹기
-        [159] = (true, [(Stat.Attack, 1)]),                                          // 각지기
-        [294] = (true, [(Stat.SpAttack, 3)]),                                        // 반딧불 (5세대 +3)
-        [336] = (true, [(Stat.Attack, 1)]),                                          // 멀리짖기
-        [397] = (true, [(Stat.Speed, 2)]),                                           // 록커트
-        [455] = (true, [(Stat.Defense, 1), (Stat.SpDefense, 1)]),                    // 방어지령
-        [468] = (true, [(Stat.Attack, 1), (Stat.Accuracy, 1)]),                      // 손톱갈기
-        [475] = (true, [(Stat.Speed, 2)]),                                           // 바디퍼지 (무게 감소는 쓰이지 않음)
-        [483] = (true, [(Stat.SpAttack, 1), (Stat.SpDefense, 1), (Stat.Speed, 1)]),  // 나비춤
-        [508] = (true, [(Stat.Attack, 1), (Stat.Speed, 2)]),                         // 기어체인지
-        [526] = (true, [(Stat.Attack, 1), (Stat.SpAttack, 1)]),                      // 분발
-        [538] = (true, [(Stat.Defense, 3)]),                                         // 코튼가드
-
-        // 상대의 능력치를 내리는 기술
-        [45] = (false, [(Stat.Attack, -1)]),                                         // 울음소리
-        [39] = (false, [(Stat.Defense, -1)]),                                        // 꼬리흔들기
-        [43] = (false, [(Stat.Defense, -1)]),                                        // 째려보기
-        [103] = (false, [(Stat.Defense, -2)]),                                       // 싫은소리
-        [319] = (false, [(Stat.SpDefense, -2)]),                                     // 금속음
-        [313] = (false, [(Stat.SpDefense, -2)]),                                     // 거짓울음
-        [204] = (false, [(Stat.Attack, -2)]),                                        // 애교부리기
-        [28] = (false, [(Stat.Accuracy, -1)]),                                       // 모래뿌리기
-        [108] = (false, [(Stat.Accuracy, -1)]),                                      // 연막
-        [230] = (false, [(Stat.Evasion, -1)]),                                       // 달콤한향기 (5세대 -1)
-        [321] = (false, [(Stat.Attack, -1), (Stat.Defense, -1)]),                    // 간지르기
-        [81] = (false, [(Stat.Speed, -1)]),                                          // 실뿜기 (5세대 -1)
-        [134] = (false, [(Stat.Accuracy, -1)]),                                      // 숟가락휘기
-        [148] = (false, [(Stat.Accuracy, -1)]),                                      // 플래시
-        [178] = (false, [(Stat.Speed, -2)]),                                         // 목화포자
-        [184] = (false, [(Stat.Speed, -2)]),                                         // 겁나는얼굴
-        [297] = (false, [(Stat.Attack, -2)]),                                        // 깃털댄스
-        [445] = (false, [(Stat.SpAttack, -2)]),                                      // 유혹 (성별이 없어서 항상 적용)
-
-        // 상대의 능력치를 올리고 혼란에 빠뜨리는 기술 (혼란은 DB의 MoveStatusEffect로 처리)
-        [207] = (false, [(Stat.Attack, 2)]),                                         // 뽐내기
-        [260] = (false, [(Stat.SpAttack, 1)]),                                       // 부추기기
+        ["attack"] = Stat.Attack, ["defense"] = Stat.Defense, ["special-attack"] = Stat.SpAttack,
+        ["special-defense"] = Stat.SpDefense, ["speed"] = Stat.Speed, ["accuracy"] = Stat.Accuracy,
+        ["evasion"] = Stat.Evasion,
     };
+
+    // DB에 능력치 변화가 있어도 조건이 붙거나 다른 효과와 함께 처리해야 해서, 능력치만 바꾸는 일반 처리에서 뺀 변화 기술
+    // 일구기·플라워가드(풀 타입만, UseEffectMove), 막말내뱉기(교체도 함, UseSwitchMove),
+    // 아로마미스트·자기장조작(이 게임에서는 실패). 베놈트랩(독 상태인 상대만)과 지오컨트롤(2턴 기술)은 DB 값을 쓰고 조건만 따로 본다.
+    private static readonly HashSet<int> ConditionalStatMoveIds = [563, 575, 579, 597, 602];
+
+    // 능력치만 바꾸는 변화 기술이면 DB의 능력치 변화를 Stat 순서로 돌려준다. 게임 범위인 6세대까지의 기술만 다룬다.
+    // 비축하기·충전·추억의선물·안개제거 등 다른 효과가 함께 있는 기술은 UseSpecialMove가 처리한다.
+    private bool TryGetStatChanges(PokemonMoveInfo move, out (Stat Stat, int Change, string Target)[] changes)
+    {
+        changes = data.MoveStatChangesByMoveId[move.Id]
+            .Select(change => (Stat: StatByIdentifier[change.Stat], change.Change, change.Target))
+            .OrderBy(change => change.Stat)
+            .ToArray();
+        return move.Category == "변화" && changes.Length > 0 && move.Generation <= 6 &&
+               !SpecialMoveIds.Contains(move.Id) && !ConditionalStatMoveIds.Contains(move.Id);
+    }
 
     private const int ReflectMoveId = 115, LightScreenMoveId = 113, TailwindMoveId = 366, TrickRoomMoveId = 433,
         MistMoveId = 54, FocusEnergyMoveId = 116, LuckyChantMoveId = 381, HazeMoveId = 114, ClearSmogMoveId = 499,
@@ -97,21 +60,32 @@ partial class RoomManager
         return (int)speed;
     }
 
-    // 명중 판정. 명중률이 없는 기술은 반드시 맞는다. 사용자의 명중률 랭크 - 상대의 회피율 랭크를 반영한다.
-    private static bool AccuracyCheck(BattlePokemon user, BattlePokemon target, PokemonMoveInfo move)
+    // 명중 판정. 명중률이 없는 기술은 반드시 맞는다. 사용자의 명중률 랭크 - 상대의 회피율 랭크를 반영하고,
+    // 중력 중에는 명중률이 5/3배가 된다.
+    // ignoreEvasion: 상대의 회피율 랭크를 무시한다 (야금야금·성스러운칼)
+    private static bool AccuracyCheck(GameRoom room, BattlePokemon user, BattlePokemon target, PokemonMoveInfo move,
+        bool ignoreEvasion = false)
     {
-        if (move.Accuracy is not int accuracy)
+        // 록온·마음의눈으로 노린 상대와 텔레키네시스로 떠오른 상대에게는 반드시 맞는다.
+        if (move.Accuracy is not int accuracy || ReferenceEquals(user.LockOnTarget, target) || target.TelekinesisTurns > 0)
             return true;
-        int stage = Math.Clamp(user.GetStage(Stat.Accuracy) - target.GetStage(Stat.Evasion), -6, 6);
-        return Random.Shared.Next(100) < accuracy * AccuracyMultiplier(stage);
+        int evasion = ignoreEvasion ? 0 : target.GetStage(Stat.Evasion);
+        if ((target.Identified || target.MiracleEye) && evasion > 0)
+            evasion = 0;    // 꿰뚫어보기·냄새구별·미라클아이: 오른 회피율을 무시한다.
+        int stage = Math.Clamp(user.GetStage(Stat.Accuracy) - evasion, -6, 6);
+        double gravity = room.GravityTurns > 0 ? 5.0 / 3 : 1;
+        return Random.Shared.Next(100) < accuracy * AccuracyMultiplier(stage) * gravity;
     }
 
-    // 급소 판정: 기본 1/16, 기충전이면 1/4. 상대 편에 주술이 걸려 있으면 급소에 맞지 않는다.
-    private static bool RollCritical(BattlePokemon attacker, BattleSide defender)
+    // 급소 판정 (6세대): 급소 랭크 0 → 1/16, 1 → 1/8, 2 → 1/2, 3 이상 → 반드시.
+    // 급소 랭크 = 기충전(+2) + 급소에 잘 맞는 기술(DB의 crit_rate, 업어후리기·얼음숨결은 6이라 반드시 급소).
+    // 상대 편에 주술이 걸려 있으면 급소에 맞지 않는다.
+    private static bool RollCritical(BattlePokemon attacker, BattleSide defender, int moveCritRate)
     {
         if (defender.LuckyChantTurns > 0)
             return false;
-        return Random.Shared.Next(attacker.FocusEnergy ? 4 : 16) == 0;
+        int stage = (attacker.FocusEnergy ? 2 : 0) + moveCritRate;
+        return stage >= 3 || Random.Shared.Next(stage switch { 0 => 16, 1 => 8, _ => 2 }) == 0;
     }
 
     // 랭크를 바꾸고 기록을 남긴다. 이미 한계(+6/-6)면 바뀌지 않는다. 실제로 바뀐 단계를 돌려준다.
@@ -143,17 +117,16 @@ partial class RoomManager
     }
 
     private static void UseStatChangeMove(GameRoom room, BattleSide attacker, BattleSide defender,
-        (bool Self, (Stat Stat, int Stages)[] Changes) entry)
+        (Stat Stat, int Change, string Target)[] changes)
     {
-        BattleSide target = entry.Self ? attacker : defender;
         // 흰안개: 상대가 쓰는 능력치 하락을 막는다. (뽐내기처럼 상대 능력치를 올리는 기술은 막지 않는다.)
-        if (!entry.Self && target.MistTurns > 0 && entry.Changes.Any(change => change.Stages < 0))
+        if (defender.MistTurns > 0 && changes.Any(change => change.Target == "opponent" && change.Change < 0))
         {
-            LogPokemon(room, target, $"{WithJosa(target.Current.Info.Name, "은", "는")} 흰안개에 보호되고 있다!");
+            LogPokemon(room, defender, $"{WithJosa(defender.Current.Info.Name, "은", "는")} 흰안개에 보호되고 있다!");
             return;
         }
-        foreach (var (stat, stages) in entry.Changes)
-            ChangeStage(room, target, stat, stages, announceFailure: true);
+        foreach (var (stat, change, target) in changes)
+            ChangeStage(room, target == "self" ? attacker : defender, stat, change, announceFailure: true);
     }
 
     // 실제 변화 방향마다 한 번만 연출한다. 배턴터치의 교체·랭크 전달은 증감으로 처리하지 않는다.
@@ -184,7 +157,8 @@ partial class RoomManager
         return [
             side.ReflectTurns, side.LightScreenTurns, side.TailwindTurns, side.MistTurns,
             side.LuckyChantTurns, side.SafeguardTurns, side.WishTurns,
-            side.QuickGuard ? 1 : 0, pokemon.Protected ? 1 : 0, pokemon.Enduring ? 1 : 0,
+            side.QuickGuard ? 1 : 0, side.WideGuard ? 1 : 0, side.MatBlock ? 1 : 0, side.CraftyShield ? 1 : 0,
+            pokemon.Protected ? 1 : 0, pokemon.Enduring ? 1 : 0, pokemon.MagnetRiseTurns,
             pokemon.MagicCoat ? 1 : 0, pokemon.SubstituteHp,
             pokemon.AquaRing ? 1 : 0, pokemon.Ingrained ? 1 : 0, pokemon.StockpileCount, pokemon.ChargeTurns
         ];
@@ -255,6 +229,9 @@ partial class RoomManager
                     defender.ReflectTurns = defender.LightScreenTurns = defender.MistTurns = defender.SafeguardTurns = 0;
                     LogSide(room, defender, "{0}의 리플렉터·빛의장막·흰안개·신비의부적이 사라졌다!");
                 }
+                // 6세대부터 양쪽 편의 설치기도 없앤다.
+                if (ClearHazards(attacker) | ClearHazards(defender))
+                    LogBoth(room, attacker, "설치기가 모두 사라졌다!");
                 break;
             case PowerSplitMoveId:
                 (user.Attack, target.Attack) = Average(user.Attack, target.Attack);
@@ -336,30 +313,12 @@ partial class RoomManager
         }
     }
 
-    // 배턴터치: 고른 포켓몬과 교체하고, 랭크·기충전·혼란·아쿠아링·뿌리박기·대타를 그대로 넘겨준다.
+    // 배턴터치: 다음 포켓몬을 골라(턴 도중 교체) 랭크·기충전·혼란·아쿠아링·뿌리박기·대타를 그대로 넘겨준다.
+    // 교체할 포켓몬이 없으면 실패한다. 넘겨주는 처리는 CompleteMidTurnSwitch에서 한다.
     private static void UseBatonPass(GameRoom room, BattleSide side)
     {
-        if (side.BatonTarget is not int index || side.Team[index].Hp == 0)
-        {
+        if (!StartMidTurnSwitch(room, side, batonPass: true))
             LogBoth(room, side, "하지만 실패했다!");
-            return;
-        }
-
-        BattlePokemon previous = side.Current;
-        int[] stages = previous.Stages.ToArray();
-        bool focusEnergy = previous.FocusEnergy, aquaRing = previous.AquaRing, ingrained = previous.Ingrained;
-        int confusion = previous.ConfusionTurns, substitute = previous.SubstituteHp;
-
-        ChangeActive(room, side, index);
-        BattlePokemon next = side.Current;
-        stages.CopyTo(next.Stages, 0);
-        next.FocusEnergy = focusEnergy;
-        next.ConfusionTurns = confusion;
-        next.AquaRing = aquaRing;
-        next.Ingrained = ingrained;
-        next.SubstituteHp = substitute;
-        Log(room, side, $"돌아와, {previous.Info.Name}! 가라, {next.Info.Name}!",
-            $"상대가 {WithJosa(previous.Info.Name, "을", "를")} 거두고 {WithJosa(next.Info.Name, "을", "를")} 내보냈다!");
     }
 
     private static void StartSideEffect(GameRoom room, BattleSide side, int turnsLeft, int duration,

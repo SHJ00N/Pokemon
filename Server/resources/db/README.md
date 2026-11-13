@@ -5,17 +5,25 @@
 | 항목 | 개수 |
 | --- | --- |
 | 종 (전국도감 1~1025번) | 1,025 |
-| 폼 (기본 폼 + 리전폼·메가진화·거다이맥스 등) | 1,323 (팀에 넣을 수 있는 폼 1,139) |
+| 폼 (기본 폼 + 리전폼·메가진화·거다이맥스 등) | 1,323 (팀에 넣을 수 있는 폼 748: 6세대까지 나온 폼만) |
 | 진화 관계 (폼 단위) | 527 |
 | 전투 중 폼 체인지 | 163 |
 | 특성 / 포켓몬별 특성 | 313 / 2,883 |
 | 도구 (지닐 수 있는 도구, 메가스톤 등) | 396 |
 | 기술 (Z기술 53개·다이맥스기 19개 포함) | 919 |
-| 습득 기술 연결 | 72,715 |
+| 습득 기술 연결 | 81,039 |
 | 타입 / 상성 | 18 / 324 |
-| 상태이상 / 기술별 상태이상 효과 | 8 / 87 |
+| 상태이상 / 기술별 상태이상 효과 | 8 / 100 |
+| 기술 부가 효과 / 기술의 능력치 변화 | 827 / 245 |
 
-**데이터 기준은 현재 세대입니다.** 페어리를 포함한 18타입과 6세대 이후 상성(고스트·악 → 강철 1배)을 쓰며, 포켓몬의 타입·종족값과 기술의 위력·명중률·PP도 원본의 현재 값입니다. 전투 계산(데미지 공식, 상태이상 규칙 등)은 여전히 서버 코드의 5세대 규칙을 따릅니다.
+**데이터 기준은 6세대(XY·오메가루비·알파사파이어)입니다.** 페어리를 포함한 18타입과 6세대 상성(고스트·악 → 강철 1배)을 씁니다.
+
+- **팀에 넣을 수 있는 포켓몬:** 6세대 게임까지 나온 폼만 넣을 수 있습니다(전국도감 1~721번, 리전폼·7세대 이후 폼 제외). 7세대 이후 포켓몬·폼·기술도 DB에는 남아 있지만 팀에 넣을 수 없습니다.
+- **습득 기술:** XY·ORAS를 합치고 진화 전 단계의 기술을 물려받습니다(아래 "습득 가능 기술").
+- **기술 값:** 7세대 이후에 바뀐 6세대까지의 기술 13개는 PokéAPI `move_changelog.csv`로 6세대 값으로 되돌렸습니다. 예: 몸통박치기 위력 50, 전기자석파 명중률 100, 흡혈 위력 20, 기습 위력 80, 고속스핀 위력 20.
+- **종족값:** 7세대 이후에 바뀐 폼은 PokéAPI `pokemon_stats_past.csv`로 6세대 값으로 되돌렸습니다. 예: 킬가르도, 메가후딘, 패리퍼, 코산호.
+- **타입:** 6세대 이후 바뀐 포켓몬이 없어 원본 값 그대로입니다.
+- 특성은 아직 전투에 쓰지 않아 원본의 현재 값입니다. 전투 계산(데미지 공식, 상태이상 규칙 등)은 서버 코드의 6세대 규칙을 따릅니다.
 
 ## 다시 만들기
 
@@ -25,7 +33,7 @@ DB는 [build_db.py](../../tools/build_db.py)가 [PokéAPI CSV](https://github.co
 python3 Server/tools/build_db.py --download ~/pokeapi-csv --force
 ```
 
-- `--download <폴더>`: 고정 커밋(`e5b79b2e15d7c50735a945936afd4cd1cfd94eae`, 2026-11-02)의 CSV 24개(약 12MB)를 그 폴더에 내려받은 뒤 DB를 만듭니다. 이미 받은 파일은 다시 받지 않습니다. 받은 CSV로 다시 만들 때는 `--source <폴더>`를 씁니다.
+- `--download <폴더>`: 고정 커밋(`e5b79b2e15d7c50735a945936afd4cd1cfd94eae`, 2026-11-02)의 CSV 33개(약 13MB)를 그 폴더에 내려받은 뒤 DB를 만듭니다. 이미 받은 파일은 다시 받지 않습니다. 받은 CSV로 다시 만들 때는 `--source <폴더>`를 씁니다.
 - `--force`가 없으면 기존 DB를 덮어쓰지 않습니다. 생성 중에는 임시 파일에 쓰고, 검사를 모두 통과한 뒤에 교체합니다.
 - 같은 폴더의 [source_manifest.json](source_manifest.json)에 원본 커밋, 원본 CSV와 프로젝트 전용 CSV의 SHA-256, 테이블별 행 수, 아래 "직접 정한 것"의 목록이 저장됩니다.
 - PokéAPI에 없는 프로젝트 전용 데이터는 [Server/tools/db_custom/](../../tools/db_custom)의 CSV에서 읽습니다.
@@ -34,7 +42,7 @@ python3 Server/tools/build_db.py --download ~/pokeapi-csv --force
 | --- | --- |
 | `type_colors.csv` | 타입별 터미널 표시 색 (페어리 `#D685AD` 추가) |
 | `status_conditions.csv` | 상태이상 8종 (맹독은 프로젝트 전용 ID `1001`) |
-| `move_status_effects.csv` | 기술별 상태이상 효과 87개 (기술 1~559번) |
+| `move_status_effects.csv` | 기술별 상태이상 효과 87개 (기술 1~559번). 560번 이후는 `move_meta.csv`로 채움 |
 | `form_names.csv` | 원본에 한국어 폼 이름이 없어 직접 적은 22개 |
 
 생성 과정에서 종 번호 연속성, 모든 종에 도감번호와 같은 번호의 기본 폼이 있는지, 타입·종족값 범위, 324개 상성, 진화 관계의 순환 여부, 모든 메가진화에 메가스톤(또는 기술)이 연결됐는지, 모든 폼의 습득 기술, Z기술·다이맥스기를 배우는 폼이 없는지, 외래 키와 SQLite 무결성을 검사합니다. 하나라도 실패하면 DB를 만들지 않습니다.
@@ -46,7 +54,10 @@ PokemonSpecies (종, 전국도감 번호)
   └─ Pokemon (폼) ──┬─ PokemonEvolution (진화 전 폼 → 진화 후 폼)
                     ├─ PokemonFormChange (전투 중 폼 체인지 → Item, PokemonMove)
                     ├─ PokemonAbility ── Ability
-                    ├─ PokemonLearnset ── PokemonMove ── MoveStatusEffect ── StatusCondition
+                    ├─ PokemonLearnset ── PokemonMove ─┬─ MoveStatusEffect ── StatusCondition
+                    │                                  ├─ MoveMeta (풀죽음·흡수·연속기 등)
+                    │                                  ├─ MoveStatChange (능력치 변화)
+                    │                                  └─ MoveFlag (접촉·소리·방어에 막힘 등)
                     └─ Type ── TypeEffectiveness
 Item (지닌 도구)
 ```
@@ -79,7 +90,7 @@ Item (지닌 도구)
 | `region` | 리전폼의 지방 (`alola`, `galar`, `hisui`, `paldea`). 가라르 불비달마의 달마모드처럼 리전폼의 전투 폼에도 붙습니다 |
 | `is_default` | 그 종의 기본 폼 |
 | `is_battle_only` | 전투 중에만 되는 폼 |
-| `is_selectable` | 팀에 넣을 수 있는 폼 |
+| `is_selectable` | 팀에 넣을 수 있는 폼 (6세대 게임까지 나온 폼만) |
 | `type1_id`, `type2_id` | 타입. 단일 타입이면 `type2_id`가 `NULL` |
 | `base_hp` … `base_speed` | 종족값 |
 | `height`, `weight` | 키(0.1m), 몸무게(0.1kg). 안다리걸기·헤비봄버처럼 무게를 쓰는 기술에 씁니다 |
@@ -87,9 +98,9 @@ Item (지닌 도구)
 
 | `form_kind` | 개수 | 예 | 팀 선택 |
 | --- | --- | --- | --- |
-| `default` | 1,025 | 리자몽, 도롱마담(초목도롱) | O |
-| `regional` | 57 | 알로라 라이츄, 가라르 나옹, 히스이 가디, 팔데아 켄타로스 | O |
-| `alternate` | 80 | 테오키스 어택폼, 워시로토무, 오리진폼, 오거폰 가면 | 대부분 O |
+| `default` | 1,025 | 리자몽, 도롱마담(초목도롱) | 1~721번만 O (721) |
+| `regional` | 57 | 알로라 라이츄, 가라르 나옹, 히스이 가디, 팔데아 켄타로스 | X (7세대 이후) |
+| `alternate` | 80 | 테오키스 어택폼, 워시로토무, 기라티나 오리진폼, 오거폰 가면 | 6세대까지 나온 폼만 O (27) |
 | `mega` | 97 | 메가리자몽X, 메가픽시(레전즈 Z-A), 메가라이츄X | X |
 | `primal` | 2 | 원시가이오가, 원시그란돈 | X |
 | `gmax` | 34 | 리자몽 거다이맥스 | X |
@@ -97,6 +108,7 @@ Item (지닌 도구)
 
 팀에 넣을 수 없는 `alternate`는 다음과 같습니다.
 
+- **7세대 이후에 나온 폼:** 오거폰 가면, 디아루가·펄기아 오리진폼, 지가르데 10%폼, 유대변화 개굴닌자 등. 폼이 처음 나온 게임은 PokéAPI `pokemon_forms.csv`의 `introduced_in_version_group_id`로 판단합니다.
 - **배틀 데이터가 기본 폼과 똑같은 폼 22개:** 타입·종족값·특성이 모두 같고 겉모습만 다른 폼입니다. 메테노의 유성 색, 코라이돈·미라이돈의 탈것 폼, 케르디오 각오의 모습 등. 목록이 같은 포켓몬으로 채워지지 않도록 뺐습니다.
 - **무한다이노 무한다이맥스:** 게임에서 플레이어가 쓸 수 없는 폼입니다.
 
@@ -185,20 +197,70 @@ JOIN Ability AS a USING (ability_id) WHERE pa.pokemon_id = 6 ORDER BY pa.slot;
 
 ## 습득 가능 기술
 
-`PokemonLearnset`은 **각 폼이 마지막으로 나온 게임의 습득 기술**입니다. 그 게임의 레벨업·기술머신·교배·가르침 등 모든 경로를 합치며, 습득 레벨과 경로는 저장하지 않습니다. 어느 게임의 기술인지는 `Pokemon.learnset_version_group`에 있습니다.
+`PokemonLearnset`은 **6세대 게임(XY·오메가루비·알파사파이어)의 습득 기술을 합친 것**에 **진화 전 단계의 기술**을 더한 것입니다. 레벨업·기술머신·교배(알 기술)·가르침 등 모든 경로를 합치며, 습득 레벨과 경로는 저장하지 않습니다. 팀에 넣을 수 있는 748개 폼의 `Pokemon.learnset_version_group`은 모두 `x-y+omega-ruby-alpha-sapphire`입니다.
 
-| 기준 게임 | 팀에 넣을 수 있는 폼 |
+- **진화 전 단계의 기술:** 진화 전 폼이 배우는 기술은 진화한 뒤에도 배울 수 있습니다(`PokemonEvolution`을 거슬러 올라가 합침, 3,316개 추가). PokéAPI는 알 기술을 진화 전 포켓몬에만 적어 두기 때문에 필요합니다. 예: 리자몽은 파이리의 알 기술인 용의춤·배북도 배웁니다.
+- 폼 자체의 6세대 기록이 없으면 같은 종 기본 폼의 기술을 씁니다(현재는 해당하는 폼이 없습니다).
+- 6세대까지의 기술 621개 중 613개를 배울 수 있습니다. 못 배우는 8개는 발버둥과 이벤트 배포 전용 기술(V제너레이트, 사우전드애로·사우전드웨이브, 해피타임, 축하, 손에손잡기, 적당히손봐주기)입니다. 7세대 이후 기술은 배울 수 없습니다.
+- 6세대에 없던 폼(팀에 넣을 수 없음)은 마지막으로 나온 일반 배틀 게임의 습득 기술을 그대로 둡니다.
+- 습득 기술이 4개 미만이라 팀에 넣을 수 없는 포켓몬은 메타몽(변신)·루브도(스케치)·안농(잠재파워) 3종입니다. 클라이언트가 선택할 때 안내합니다.
+
+## 기술 부가 효과와 능력치 변화
+
+PokéAPI `move_meta.csv`, `move_meta_stat_changes.csv`를 그대로 옮겼습니다. 분류·대상·상태이상 이름은 PokéAPI 영문 식별자입니다(`move_meta_categories.csv`, `move_targets.csv`, `move_meta_ailments.csv`, `stats.csv`). 값은 현재 세대 기준입니다(PokéAPI에 이전 값 기록이 없음). 6세대 값과 다른 고속스핀(스피드 +1은 8세대부터)·다이아스톰(6세대는 방어 +1)은 서버 코드에서 6세대 값으로 처리합니다.
+
+`MoveMeta` (기술 827개. 원본에 없는 92개 기술은 행이 없습니다)
+
+| 열 | 의미 |
 | --- | --- |
-| 포켓몬 챔피언스 (`champions`) | 235 |
-| 스칼렛·바이올렛 (`scarlet-violet`) | 634 |
-| 소드·실드 (`sword-shield`) | 138 |
-| 브릴리언트다이아몬드·샤이닝펄 (`brilliant-diamond-shining-pearl`) | 125 |
-| 울트라썬·울트라문 (`ultra-sun-ultra-moon`) | 7 |
+| `category` | `damage`, `ailment`, `net-good-stats`(능력치 변화 기술), `heal`, `damage-ailment`, `swagger`(뽐내기류), `damage-lower`(공격 후 상대 능력치 하락), `damage-raise`(공격 후 자신 능력치 변화), `damage-heal`, `ohko`, `whole-field-effect`, `field-effect`, `force-switch`, `unique` |
+| `target` | 기술 대상. `selected-pokemon`, `user`, `users-field`, `all-opponents`, `entire-field` 등 |
+| `ailment`, `ailment_chance` | 원본의 상태이상(`trap`, `leech-seed` 등 이 게임에 없는 것 포함)과 확률(%). 0이면 변화 기술의 주 효과 |
+| `min_hits`, `max_hits` | 연속기 타격 횟수 (두번차기 2~2, 씨기관총 2~5). 연속기가 아니면 `NULL` |
+| `min_turns`, `max_turns` | 여러 턴 이어지는 효과의 턴 수 (난동부리기, 조이기 등) |
+| `drain` | 준 데미지의 %만큼 HP 흡수(양수, 기가드레인 50) 또는 반동(음수, 이판사판태클 -33) |
+| `healing` | 최대 HP의 %만큼 회복 (HP회복 50) |
+| `crit_rate` | 급소 랭크 보정 (베어가르기·태권당수 1) |
+| `flinch_chance` | 풀죽음 확률(%) (물기 30) |
+| `stat_chance` | 능력치 변화 확률(%). 0이면 항상 |
 
-- 배틀 방식이 다른 외전(레츠고 피카츄·이브이, 레전즈 아르세우스, 레전즈 Z-A, 콜로세움·XD)은 다른 게임에 없는 폼에만 씁니다. 현재는 해당하는 폼이 없습니다.
-- 진화 전 단계의 기술은 물려받지 않습니다. 진화 정보(`PokemonEvolution`)가 있으므로 나중에 상속 규칙을 넣을 수 있습니다.
-- 이전 DB(블랙2·화이트2 레벨업 + 1~5세대 교배기·비전머신)와 기술 목록이 많이 다릅니다. 예를 들어 최근 게임에서 빠진 비전머신 괴력은 피카츄가 더 이상 배우지 못하고, 기술머신 기술은 새로 배웁니다.
-- 습득 기술이 4개 미만이라 팀에 넣을 수 없는 포켓몬이 12종 있습니다: 메타몽·루브도·안농 각 1개, 캐터피·뿔충이·잉어킹 3개, 단데기·딱충이·실쿤·카스쿤 1개, 코스모그 2개, 코스모움 2개. 클라이언트가 선택할 때 안내합니다.
+`MoveStatChange` (245줄, 기술·능력치마다 한 줄)
+
+| 열 | 의미 |
+| --- | --- |
+| `stat` | `attack`, `defense`, `special-attack`, `special-defense`, `speed`, `accuracy`, `evasion` |
+| `change` | 랭크 변화 단계 (칼춤 +2, 울음소리 -1) |
+| `chance` | 확률(%). `MoveMeta.stat_chance`가 0이면 100 |
+| `target` | `self`(자신) 또는 `opponent`(상대). 아래 규칙으로 정합니다 |
+
+- `damage-raise` 분류(공격 후 자신의 능력치가 바뀌는 기술: 인파이트, 리프스톰, 니트로차지)는 `self`입니다.
+- `damage-lower`(공격 후 상대 능력치를 내리는 기술: 사이코키네시스 10% 특방 -1)와 `swagger`(뽐내기·부추기기)는 `opponent`입니다.
+- 나머지는 기술 대상이 자신·우리 편(`user`, `users-field`, `user-and-allies` 등)이면 `self`, 아니면 `opponent`입니다.
+
+```sql
+-- 칼춤과 인파이트의 능력치 변화
+SELECT m.name, s.stat, s.change, s.chance, s.target FROM MoveStatChange AS s
+JOIN PokemonMove AS m USING (move_id) WHERE s.move_id IN (14, 370);
+```
+
+## 기술 플래그
+
+`MoveFlag` (1,935줄, 기술 730개. 기술·플래그마다 한 줄)는 PokéAPI `move_flag_map.csv`와 `move_flags.csv`를 그대로 옮겼습니다. `flag`는 PokéAPI 영문 식별자이고, 값은 현재 세대 기준입니다(PokéAPI에 이전 값 기록이 없음). 서버는 다음 플래그를 씁니다.
+
+| 플래그 | 서버에서 쓰는 곳 |
+| --- | --- |
+| `protect` | 방어 계열에 막히는 기술 |
+| `reflectable` | 매직코트로 되받아칠 수 있는 기술 |
+| `authentic` | 대타를 무시하는 기술 (사슬묶기·앙코르·도발·저주 등) |
+| `contact` | 킹실드·니들가드의 접촉 효과 |
+| `snatch` | 가로채기로 빼앗을 수 있는 기술 |
+| `mirror` | 따라하기로 따라 할 수 있는 기술 |
+| `heal` | 회복봉인 중에 쓸 수 없는 기술 |
+
+```sql
+-- 접촉 기술 목록
+SELECT m.name FROM MoveFlag AS f JOIN PokemonMove AS m USING (move_id) WHERE f.flag = 'contact';
+```
 
 ## 타입과 상성
 
@@ -212,7 +274,7 @@ WHERE a.name = '드래곤' AND d.name = '페어리';   -- 0.0
 
 ## 상태이상과 기술별 적용 효과
 
-`StatusCondition`은 상태이상 정의, `MoveStatusEffect`는 기술과 상태이상의 연결입니다. 프로젝트에서 직접 정리한 데이터라 `db_custom/`의 CSV로 보관하며, 이전 DB와 값이 같습니다. **기술 1~559번만 연결되어 있습니다.** 560번 이후 기술의 상태이상 효과는 아직 없습니다.
+`StatusCondition`은 상태이상 정의, `MoveStatusEffect`는 기술과 상태이상의 연결입니다. **기술 1~559번은 프로젝트에서 직접 정리한 `db_custom/move_status_effects.csv`(87개, 이전 DB와 같은 값)를 쓰고, 560번 이후는 PokéAPI `move_meta.csv`의 상태이상으로 채웁니다(13개).** 이 게임의 상태이상(마비~헤롱헤롱)만 넣으며, 상대에게 적중했을 때(`on_hit`) 거는 것으로 저장합니다. 6세대 기술은 프리즈드라이(얼음 10%), 스팀버스트(화상 30%), 볼부비부비(마비 100%)입니다. 질투의불꽃은 "그 턴에 능력치가 오른 상대만 화상"이라는 조건이 있어 넣지 않았습니다.
 
 | 열 | 의미 |
 | --- | --- |
