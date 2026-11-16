@@ -46,6 +46,10 @@ static class BattlePanelRenderer
     public static string[] StatChanges(PokemonView pokemon) => pokemon.StatChanges is { Length: > 0 } changes
         ? new[] { "능력치 변화" }.Concat(changes.Select(StatusColorRenderer.FormatStatChange)).ToArray() : [];
 
+    // 정보 상자 바로 아래 빈 줄에 그 편에 걸린 효과(리플렉터·스텔스록 등)를 한 줄로 표시한다.
+    public static string[] SideEffects(string[]? effects) => effects is { Length: > 0 }
+        ? [TextRenderer.FitToWidth(string.Join("  ", effects), Width)] : [];
+
     public readonly record struct Panel(int X, int Y, string[] Lines);
 
     public static Panel[] Arrange(BattleView battle, int width, int statusY,
@@ -58,6 +62,8 @@ static class BattlePanelRenderer
         return [
             new(leftX, statusY, Pokemon(active.Pokemon)),
             new(rightX, statusY, Pokemon(battle.Opponent)),
+            new(leftX, statusY + 4, SideEffects(battle.SideEffects)),
+            new(rightX, statusY + 4, SideEffects(battle.OpponentSideEffects)),
             new(leftX, statusY + 5, switchList == null ? Moves(active.Moves) : Switches(battle, switchList, showBack)),
             new(leftX + Width + 3, statusY + 1, StatChanges(active.Pokemon)),
             new(rightX - changesWidth - 3, statusY + 1, opponentChanges)

@@ -19,5 +19,8 @@ public sealed record RoomSummary(int RoomId, string HostName, int PlayerCount, b
 
 // 전투 화면 정보. 받는 플레이어 기준으로 내 팀 전체와 상대의 현재 출전 포켓몬만 담는다.
 // FieldEffects: 날씨·필드·공간 효과와 남은 턴. 예: ["날씨: 비 (4턴)", "필드: 그래스필드 (3턴)", "트릭룸 (2턴)"]
+// SideEffects / OpponentSideEffects: 내 편·상대 편에만 걸린 효과. 예: ["리플렉터 (4턴)", "스텔스록", "압정뿌리기 2층"]
+// Moves: 지금 쓸 수 있는 기술. 메타몽처럼 4개보다 적을 수 있고, 변신하면 상대의 기술로 바뀐다.
 public sealed record TeamMemberView(PokemonView Pokemon, MoveView[] Moves);
-public sealed record BattleView(TeamMemberView[] Team, int Active, PokemonView Opponent, string[] FieldEffects);
+public sealed record BattleView(TeamMemberView[] Team, int Active, PokemonView Opponent, string[] FieldEffects,
+    string[] SideEffects, string[] OpponentSideEffects);

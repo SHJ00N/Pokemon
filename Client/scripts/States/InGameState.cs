@@ -369,10 +369,18 @@ sealed class InGameState : ClientState
                 Notification = "목록에 있는 포켓몬 번호를 입력하세요.";
             else if (pickedPokemon.Any(p => p.SpeciesId == pokemon.SpeciesId))
                 Notification = "이미 팀에 있는 포켓몬입니다. 같은 포켓몬은 폼이 달라도 한 마리만 넣을 수 있습니다.";
-            else if (pokemon.LearnableMoveIds.Length < 4)
-                Notification = "서로 다른 기술 4개를 배울 수 있는 포켓몬을 선택하세요.";
             else
+            {
                 pickedPokemon.Add(pokemon);
+                if (pokemon.LearnableMoveIds.Length < 4)
+                {
+                    var movesById = catalog.Moves.ToDictionary(move => move.MoveId);
+                    Notification = $"{InGameRenderer.DisplayName(pokemon)}: 배울 수 있는 기술이 " +
+                        string.Join(" / ", pokemon.LearnableMoveIds.Select(moveId => movesById[moveId].Name)) +
+                        "뿐이라 기술을 고르지 않고 그대로 가집니다.";
+                }
+                await AddPokemonWithFewMovesAsync(writer);
+            }
         }
         else if (id == 0)
         {
@@ -402,6 +410,15 @@ sealed class InGameState : ClientState
     {
         team.Add(new PokemonSelection(pokemon.PokemonId, selectedMoves.ToArray()));
         selectedMoves.Clear();
+        await AddPokemonWithFewMovesAsync(writer);
+    }
+
+    // 다음에 기술을 고를 포켓몬이 배울 수 있는 기술이 4개보다 적으면(메타몽) 고를 것 없이 그 기술을 모두 가지고
+    // 팀에 들어간다. 3마리의 기술이 모두 정해지면 서버에 보낸다.
+    private async Task AddPokemonWithFewMovesAsync(StreamWriter writer)
+    {
+        while (MoveTarget is PokemonCatalogEntry next && next.LearnableMoveIds.Length < 4)
+            team.Add(new PokemonSelection(next.PokemonId, next.LearnableMoveIds));
         if (team.Count == TeamSize)
         {
             await writer.WriteLineAsync("SELECT_TEAM " + JsonSerializer.Serialize(team));

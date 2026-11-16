@@ -8,7 +8,8 @@ sealed class BattlePokemon
 
     public PokemonInfo Info { get; }
     // 흉내내기·변신으로 바뀔 수 있고, 교체하면 원래 기술로 돌아온다(스케치는 원래 기술도 바꾼다).
-    public PokemonMoveInfo[] Moves { get; }
+    // 메타몽처럼 4개보다 적을 수 있고, 변신하면 상대의 기술 수만큼으로 바뀐다.
+    public PokemonMoveInfo[] Moves { get; set; }
     public int MaxHp { get; }
     public int Hp { get; set; }
     // 파워셰어·가드셰어·파워트릭·변신으로 바뀔 수 있고, 교체하면 원래 값으로 돌아온다.
@@ -155,7 +156,7 @@ sealed class BattlePokemon
         Protected = Enduring = MagicCoat = UsedProtectThisTurn = Flinched = false;
         ProtectStreak = 0;
         (Attack, Defense, SpAttack, SpDefense, Speed) = (attack, defense, spAttack, spDefense, speed);
-        originalMoves.CopyTo(Moves, 0);
+        Moves = originalMoves.ToArray();
         BaseTypes = OriginalTypes;
         AddedType = null;
         ChargingMove = LastExecutedMove = null;

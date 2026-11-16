@@ -7,6 +7,8 @@ partial class RoomManager
     private const int TeamSize = 3;
     private const int MaxNicknameLength = 8;
     private const int MaxSelectableSpeciesId = 905;
+    // 지금은 팀에 넣을 수 없는 종: 루브도(스케치는 2대2 대전에서 쓸모가 있어 그때 연다), 안농. 목록에도 보내지 않는다.
+    private static readonly HashSet<int> BlockedSpeciesIds = [235, 201];
 
     private readonly GameData data;
     private readonly string catalogMessage;     // POKEMON_CATALOG <Brotli로 압축한 JSON의 Base64>
@@ -22,7 +24,7 @@ partial class RoomManager
         this.data = data;
         // 전국도감 905번까지 팀에 넣을 수 있는 폼만 보낸다. 폼 번호가 아닌 종 번호로 제한한다.
         var selectable = data.PokemonById.Values
-            .Where(p => p.IsSelectable && p.SpeciesId <= MaxSelectableSpeciesId)
+            .Where(IsTeamSelectable)
             .OrderBy(p => p.SpeciesId).ThenBy(p => p.Id).ToArray();
         var formCount = selectable.CountBy(p => p.SpeciesId).ToDictionary();
         var pokemon = selectable
@@ -209,7 +211,7 @@ partial class RoomManager
             if (team is not { Length: TeamSize } || team.Any(p => p == null || !IsValidSelection(p)) ||
                 team.Select(p => data.PokemonById[p.PokemonId].SpeciesId).Distinct().Count() != TeamSize)
             {
-                session.QueueMessage("ERROR 서로 다른 포켓몬 3마리와 각각 배울 수 있는 서로 다른 기술 4개를 선택하세요.");
+                session.QueueMessage("ERROR 서로 다른 포켓몬 3마리와 각각 배울 수 있는 서로 다른 기술 4개(4개보다 적게 배우면 그 기술 전부)를 선택하세요.");
                 return;
             }
 
@@ -237,6 +239,12 @@ partial class RoomManager
                 room.BattleOver || me.MustSwitch || other.MustSwitch || me.HasChosen)
             {
                 session.QueueMessage("ERROR 지금은 행동을 선택할 수 없습니다.");
+                return;
+            }
+            // 기술이 4개보다 적은 포켓몬(메타몽)은 가진 기술 수까지만 고를 수 있다.
+            if (slot > me.Current.Moves.Length)
+            {
+                session.QueueMessage($"ERROR 기술 번호는 1~{me.Current.Moves.Length}입니다.");
                 return;
             }
 
@@ -666,7 +674,7 @@ partial class RoomManager
             var team = side.Team.Select(p => new TeamMemberView(GetPokemon(p), p.Moves.Select(GetMove).ToArray()));
             side.Player.QueueMessage("BATTLE_STATE " + JsonSerializer.Serialize(
                 new BattleView(team.ToArray(), side.Active, GetPokemon(GetOther(room, side).Current),
-                    GetFieldEffects(room))));
+                    GetFieldEffects(room), GetSideEffects(side), GetSideEffects(GetOther(room, side)))));
         }
     }
 
@@ -705,11 +713,19 @@ partial class RoomManager
         return true;
     }
 
-    private bool IsValidSelection(PokemonSelection selection) =>
-        data.PokemonById.TryGetValue(selection.PokemonId, out PokemonInfo? info) && info.IsSelectable &&
-        info.SpeciesId <= MaxSelectableSpeciesId &&
-        selection.MoveIds is { Length: 4 } ids && ids.Distinct().Count() == 4 &&
-        ids.All(id => data.LearnableMovesByPokemonId[selection.PokemonId].Contains(id));
+    private static bool IsTeamSelectable(PokemonInfo info) =>
+        info.IsSelectable && info.SpeciesId <= MaxSelectableSpeciesId && !BlockedSpeciesIds.Contains(info.SpeciesId);
+
+    // 기술은 서로 다른 4개. 배울 수 있는 기술이 4개보다 적으면(메타몽) 그 기술을 모두 가진다.
+    private bool IsValidSelection(PokemonSelection selection)
+    {
+        if (!data.PokemonById.TryGetValue(selection.PokemonId, out PokemonInfo? info) || !IsTeamSelectable(info) ||
+            selection.MoveIds is not int[] ids)
+            return false;
+        var learnable = data.LearnableMovesByPokemonId[selection.PokemonId];
+        int count = Math.Min(4, learnable.Count);
+        return ids.Length == count && ids.Distinct().Count() == count && ids.All(learnable.Contains);
+    }
 
     private BattleSide CreateSide(ClientSession player, PokemonSelection[] team) => new(player, team
         .Select(p => new BattlePokemon(data.PokemonById[p.PokemonId], p.MoveIds.Select(id => data.MovesById[id]).ToArray()))

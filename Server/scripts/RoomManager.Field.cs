@@ -63,6 +63,27 @@ partial class RoomManager
         return effects.ToArray();
     }
 
+    // 정보 상자 아래에 표시할 한쪽 편의 효과 (BattleView.SideEffects·OpponentSideEffects).
+    // 남은 턴이 있는 효과와, 이 편에 깔려 있어 교체해 나오는 포켓몬이 받는 설치기
+    private static string[] GetSideEffects(BattleSide side)
+    {
+        var effects = new List<string>();
+        foreach (var (name, turns) in new[]
+        {
+            ("리플렉터", side.ReflectTurns), ("빛의장막", side.LightScreenTurns), ("신비의부적", side.SafeguardTurns),
+            ("흰안개", side.MistTurns), ("순풍", side.TailwindTurns), ("주술", side.LuckyChantTurns)
+        })
+        {
+            if (turns > 0)
+                effects.Add($"{name} ({turns}턴)");
+        }
+        if (side.StealthRock) effects.Add("스텔스록");
+        if (side.Spikes > 0) effects.Add($"압정뿌리기 {side.Spikes}층");
+        if (side.ToxicSpikes > 0) effects.Add($"독압정 {side.ToxicSpikes}층");
+        if (side.StickyWeb) effects.Add("끈적끈적네트");
+        return effects.ToArray();
+    }
+
     // UseFieldMove가 처리하는 변화 기술
     private static readonly HashSet<int> FieldMoveIds =
     [

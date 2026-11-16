@@ -91,7 +91,10 @@ partial class RoomManager
                 (user.Attack, user.Defense, user.SpAttack, user.SpDefense, user.Speed) =
                     (target.Attack, target.Defense, target.SpAttack, target.SpDefense, target.Speed);
                 target.Stages.CopyTo(user.Stages, 0);
-                target.Moves.CopyTo(user.Moves, 0);
+                // 기술 수가 다를 수 있으므로(메타몽은 변신 하나) 상대의 기술 목록으로 통째로 바꾼다.
+                // 마지막으로 쓴 기술(변신)은 이제 없으므로 사슬묶기·앙코르·트집이 그 슬롯을 가리키지 않게 지운다.
+                user.Moves = target.Moves.ToArray();
+                user.LastMoveSlot = null;
                 user.Transformed = true;
                 LogPokemon(room, attacker, $"{userSubject} 상대 {WithJosa(target.Info.Name, "으로", "로")} 변신했다!");
                 break;
