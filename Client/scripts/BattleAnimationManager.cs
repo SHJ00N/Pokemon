@@ -1,5 +1,3 @@
-using Pokemon.Protocol;
-
 namespace Client;
 
 // 게임 상태·서버 메시지·콘솔 좌표를 모르는 연출 관리자. 상태마다 별도 인스턴스를 사용한다.
@@ -14,6 +12,7 @@ sealed class BattleAnimationManager
     private readonly BattleAnimation animation = new();
     private readonly StatusAnimation statusAnimation = new();
     private readonly HealingAnimation healingAnimation = new();
+    private readonly MegaEvolutionAnimation megaEvolution = new();
     private readonly FaintAnimation playerFaint = new(), opponentFaint = new();
     private readonly Queue<(Action Apply, bool StartsAnimation)> pending = new();
     private string? lastOverlaySound;
@@ -31,11 +30,12 @@ sealed class BattleAnimationManager
     }
 
     private bool IsPlaying => switchResumeAt != null || replaceAfterWithdraw != null || withdrawAnimation.IsBusy || summonAnimation.IsBusy || animation.IsBusy || statusAnimation.IsBusy ||
-        healingAnimation.IsBusy || playerFaint.IsBusy || opponentFaint.IsBusy;
+        healingAnimation.IsBusy || megaEvolution.IsBusy || playerFaint.IsBusy || opponentFaint.IsBusy;
     public bool IsBusy => IsPlaying || pending.Count > 0;
     public int PendingCount => pending.Count;
     public bool IsSummoning => summonAnimation.IsBusy;
     public bool IsSwitching => switching;
+    public bool IsMegaEvolving => megaEvolution.IsBusy;
     public bool HoldInformation => replaceAfterWithdraw != null || animation.IsBusy || statusAnimation.IsBusy || healingAnimation.IsBusy;
 
     // 연출과 그 뒤에 반영할 상태 변경을 같은 순서로 처리한다. 상태 변경 내부의 요청은 함께 적용한다.
@@ -87,8 +87,11 @@ sealed class BattleAnimationManager
         }, startsAnimation: true);
     }
 
-    public void PlayAttack(TypeView type, bool fromPlayer, double effectiveness = 1) =>
-        ExecuteOrQueue(() => animation.Enqueue(type, fromPlayer, effectiveness), startsAnimation: true);
+    public void PlayAttack(int typeId, bool fromPlayer, double effectiveness = 1) => ExecuteOrQueue(() =>
+    {
+        animation.Enqueue(typeId, fromPlayer, effectiveness);
+        nextFrameAt = 0;
+    }, startsAnimation: true);
 
     public void PlayStatus(string code, bool onPlayer) =>
         ExecuteOrQueue(() => statusAnimation.Enqueue(code, onPlayer), startsAnimation: true);
@@ -100,6 +103,13 @@ sealed class BattleAnimationManager
     {
         healingAnimation.Start(onPlayer);
         sound.PlaySoundSequence(SoundManager.HeldItemActivate, SoundManager.HealHp);
+        nextFrameAt = 0;
+    }, startsAnimation: true);
+
+    public void PlayMegaEvolution(bool onPlayer, Action revealForm) => ExecuteOrQueue(() =>
+    {
+        megaEvolution.Start(onPlayer, () => ApplyStep(revealForm));
+        nextFrameAt = 0;
     }, startsAnimation: true);
 
     public void PlayFaint(int? playerRows, int? opponentRows)
@@ -115,11 +125,11 @@ sealed class BattleAnimationManager
 
     public void ResetFaint(bool onPlayer) => (onPlayer ? playerFaint : opponentFaint).Reset();
 
-    public bool IsFrameDue(long now)
+    public bool IsFrameDue(long now, bool backgroundAnimationActive = false)
     {
         if (now < nextFrameAt) return false;
         nextFrameAt = now + (switchResumeAt != null || replaceAfterWithdraw != null || summonAnimation.IsBusy || playerFaint.IsBusy || opponentFaint.IsBusy ||
-            healingAnimation.IsBusy ? 16 : 80);
+            healingAnimation.IsBusy || megaEvolution.IsBusy || animation.IsBusy ? 16 : backgroundAnimationActive ? 48 : 80);
         return true;
     }
 
@@ -170,7 +180,7 @@ sealed class BattleAnimationManager
         // 마지막 줄이 사라진 프레임이 출력된 뒤에 다음 안내를 반영한다.
         if (wasFainting && !playerFaint.IsBusy && !opponentFaint.IsBusy) return true;
         UpdateEffects(now);
-        bool changed = replaced || summoned;
+        bool changed = megaEvolution.Update(now, sound) || replaced || summoned;
         while (!IsPlaying && pending.TryPeek(out var next))
         {
             // 중간 HP·상태를 먼저 표시하고, 그 다음 프레임부터 다음 연출을 시작한다.
@@ -179,6 +189,7 @@ sealed class BattleAnimationManager
             ApplyStep(next.Apply);
             changed = true;
         }
+        changed |= megaEvolution.Update(now, sound);
         UpdateEffects(now);
         playerFaint.Update(now);
         opponentFaint.Update(now);
@@ -189,7 +200,7 @@ sealed class BattleAnimationManager
     {
         if (healingAnimation.IsBusy)
             healingAnimation.Update(now, sound.GetSoundState(SoundManager.HealHp));
-        if (statusAnimation.Update(now) is string soundId)
+        if (statusAnimation.Update(now, sound) is string soundId)
         {
             if (lastOverlaySound != null && lastOverlaySound != soundId)
                 sound.StopSound(lastOverlaySound);
@@ -207,9 +218,9 @@ sealed class BattleAnimationManager
         int idle = IsBusy || idleStartedAt == null ? 0
             : (now - idleStartedAt.Value) % IdleCycleMilliseconds < IdleCycleMilliseconds / 2 ? 0 : -1;
         return new BattleAnimationFrame(playerAlive ? idle : 0, opponentAlive ? idle : 0,
-            animation.FlashPlayer, animation.FlashOpponent, animation.EffectType, animation.FromPlayer,
-            animation.Progress, playerFaint.Progress, opponentFaint.Progress, statusAnimation.Overlay,
-            healingAnimation.ShowImage ? healingAnimation.OnPlayer : null, summonAnimation.CurrentFrame,
-            replaceAfterWithdraw != null ? withdrawAnimation.CurrentFrame : null);
+            animation.FlashPlayer, animation.FlashOpponent, animation.CurrentFrame,
+            playerFaint.Progress, opponentFaint.Progress, statusAnimation.Overlay,
+            healingAnimation.CaptureFrame(now), summonAnimation.CurrentFrame,
+            replaceAfterWithdraw != null ? withdrawAnimation.CurrentFrame : null, megaEvolution.CurrentFrame);
     }
 }

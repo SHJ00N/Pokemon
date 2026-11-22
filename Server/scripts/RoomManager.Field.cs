@@ -4,7 +4,7 @@ partial class RoomManager
     private const string Rain = "rain", Sun = "sun", Sand = "sand", Hail = "hail";
     private const string GrassyTerrain = "grassy", MistyTerrain = "misty", ElectricTerrain = "electric";
 
-    private const int GravityMoveId = 356, WonderRoomMoveId = 472, MudSportMoveId = 300, WaterSportMoveId = 346,
+    private const int GravityMoveId = 356, TrickRoomMoveId = 433, WonderRoomMoveId = 472, MudSportMoveId = 300, WaterSportMoveId = 346,
         IonDelugeMoveId = 569, FairyLockMoveId = 587;
     private const int WeatherBallMoveId = 311, SolarBeamMoveId = 76, ThunderMoveId = 87, HurricaneMoveId = 542,
         BlizzardMoveId = 59, GrowthMoveId = 74;
@@ -88,63 +88,68 @@ partial class RoomManager
     private static readonly HashSet<int> FieldMoveIds =
     [
         .. WeatherMoves.Keys, .. TerrainMoves.Keys,
-        GravityMoveId, WonderRoomMoveId, MudSportMoveId, WaterSportMoveId, IonDelugeMoveId, FairyLockMoveId
+        GravityMoveId, TrickRoomMoveId, WonderRoomMoveId, MudSportMoveId, WaterSportMoveId, IonDelugeMoveId, FairyLockMoveId
     ];
 
-    private void UseFieldMove(GameRoom room, BattleSide side, PokemonMoveInfo move)
+    private bool UseFieldMove(GameRoom room, BattleSide side, PokemonMoveInfo move)
     {
         if (WeatherMoves.TryGetValue(move.Id, out string? weather))
         {
             if (room.Weather == weather)
             {
                 LogBoth(room, side, "하지만 실패했다!");
-                return;
+                return false;
             }
             room.Weather = weather;
             room.WeatherTurns = 5;
             LogBoth(room, side, WeatherText[weather].Start);
-            return;
+            return true;
         }
         if (TerrainMoves.TryGetValue(move.Id, out string? terrain))
         {
             if (room.Terrain == terrain)
             {
                 LogBoth(room, side, "하지만 실패했다!");
-                return;
+                return false;
             }
             room.Terrain = terrain;
             room.TerrainTurns = 5;
             LogBoth(room, side, TerrainText[terrain].Start);
-            return;
+            return true;
         }
 
         switch (move.Id)
         {
             case GravityMoveId:
-                if (StartFieldEffect(room, side, room.GravityTurns, 5, value => room.GravityTurns = value, "중력이 강해졌다!"))
-                    BringDownFromSky(room);
-                break;
+                if (!StartFieldEffect(room, side, room.GravityTurns, 5, value => room.GravityTurns = value, "중력이 강해졌다!"))
+                    return false;
+                BringDownFromSky(room);
+                return true;
+            case TrickRoomMoveId:
+                // 트릭룸 중에 다시 쓰면 원래대로 돌아온다.
+                room.TrickRoomTurns = room.TrickRoomTurns > 0 ? 0 : 5;
+                LogBoth(room, side, room.TrickRoomTurns > 0 ? "시공이 뒤틀렸다!" : "뒤틀린 시공이 원래대로 돌아왔다!");
+                return true;
             case WonderRoomMoveId:
                 // 원더룸 중에 다시 쓰면 원래대로 돌아온다.
                 room.WonderRoomTurns = room.WonderRoomTurns > 0 ? 0 : 5;
                 LogBoth(room, side, room.WonderRoomTurns > 0
                     ? "방어와 특수방어가 바뀌는 이상한 공간이 펼쳐졌다!" : "원더룸이 원래대로 돌아왔다!");
-                break;
+                return true;
             case MudSportMoveId:
-                StartFieldEffect(room, side, room.MudSportTurns, 5, value => room.MudSportTurns = value, "전기의 위력이 약해졌다!");
-                break;
+                return StartFieldEffect(room, side, room.MudSportTurns, 5, value => room.MudSportTurns = value, "전기의 위력이 약해졌다!");
             case WaterSportMoveId:
-                StartFieldEffect(room, side, room.WaterSportTurns, 5, value => room.WaterSportTurns = value, "불꽃의 위력이 약해졌다!");
-                break;
+                return StartFieldEffect(room, side, room.WaterSportTurns, 5, value => room.WaterSportTurns = value, "불꽃의 위력이 약해졌다!");
             case IonDelugeMoveId:
                 room.IonDeluge = true;
                 LogBoth(room, side, "전자가 흩뿌려졌다!");
-                break;
+                return true;
             case FairyLockMoveId:
                 // 이번 턴 끝과 다음 턴 끝에 1씩 줄어서, 다음 턴에는 교체할 수 없다.
-                StartFieldEffect(room, side, room.FairyLockTurns, 2, value => room.FairyLockTurns = value,
+                return StartFieldEffect(room, side, room.FairyLockTurns, 2, value => room.FairyLockTurns = value,
                     "다음 턴에는 교체할 수 없게 되었다!");
-                break;
+            default:
+                return false;
         }
     }
 
@@ -287,8 +292,8 @@ partial class RoomManager
         if (room.Terrain != GrassyTerrain)
             return;
         foreach (BattleSide side in sides)
-            if (IsGrounded(room, side.Current))
-                Heal(room, side, side.Current.MaxHp / 16);
+            if (IsGrounded(room, side.Current) && Heal(room, side, side.Current.MaxHp / 16, "그래스필드"))
+                SendBattleState(room);
     }
 
     // 턴 끝 마지막: 필드·중력·원더룸·흙놀이·물놀이·페어리록의 남은 턴을 줄이고, 플라스마샤워를 끝낸다.

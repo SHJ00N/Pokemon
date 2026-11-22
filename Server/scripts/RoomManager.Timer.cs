@@ -4,7 +4,6 @@ partial class RoomManager
 {
     public const int TeamTimeLimitSeconds = 300;    // 포켓몬·기술 선택 5분. 넘기면 바로 패배
     public const int ActionTimeLimitSeconds = 60;   // 턴마다 행동 선택(기절 후 교체 포함)
-    private const int MaxTimeouts = 2;              // 한 전투에서 행동 선택 시간을 이만큼 넘기면 패배
 
     // 클라이언트는 안내를 받은 뒤부터 세므로, 전송 지연과 확인 주기만큼 서버가 조금 더 기다린다.
     private const int GraceMilliseconds = 1000;
@@ -57,8 +56,7 @@ partial class RoomManager
         Console.WriteLine($"방 {room.Id} 포켓몬 선택 시간 초과");
     }
 
-    // 행동 선택 시간이 지나면 고르지 않은 쪽은 이번 턴을 쉰다. 기절 후 교체나 턴 도중 교체(유턴 등)였다면
-    // 남은 첫 포켓몬이 나간다. 한 전투에서 MaxTimeouts번 넘기면 진다.
+    // 시간이 지나면 사용할 수 있는 기술을 무작위로 고른다. 교체를 기다리는 중이면 남은 첫 포켓몬을 내보낸다.
     private void ActionTimeout(GameRoom room)
     {
         BattleSide host = room.HostSide!, guest = room.GuestSide!;
@@ -72,36 +70,31 @@ partial class RoomManager
         if (late.Length == 0)
             return;
         foreach (BattleSide side in late)
-            side.Timeouts++;
-
-        bool hostLost = host.Timeouts >= MaxTimeouts, guestLost = guest.Timeouts >= MaxTimeouts;
-        if (hostLost || guestLost)
         {
-            room.BattleOver = true;
-            host.Player.QueueMessage(TimeoutResult(hostLost, guestLost));
-            guest.Player.QueueMessage(TimeoutResult(guestLost, hostLost));
-            Console.WriteLine($"방 {room.Id} 전투 종료 (행동 선택 시간 초과 {MaxTimeouts}번)");
-            return;
-        }
-
-        foreach (BattleSide side in late)
-        {
-            Log(room, side, $"시간 안에 행동을 고르지 않았다! ({MaxTimeouts - side.Timeouts}번 더 넘기면 패배)",
-                "상대가 시간 안에 행동을 고르지 않았다!");
-            if (midTurn)
+            if (midTurn || forcedSwitch)
             {
-                // 출전 중이 아닌, HP가 남은 첫 포켓몬과 교체하고 남은 턴을 이어서 처리한다.
-                CompleteMidTurnSwitch(room, side,
-                    Enumerable.Range(0, side.Team.Length).First(index => index != side.Active && side.Team[index].Hp > 0));
-                return;
-            }
-            if (forcedSwitch)
-            {
-                // 쓰러진 출전 포켓몬의 HP는 0이므로 HP가 남은 첫 포켓몬은 항상 교체 대상이다.
-                SendInReplacement(room, side, Array.FindIndex(side.Team, pokemon => pokemon.Hp > 0));
+                Log(room, side, "시간 초과로 교체할 포켓몬을 자동 선택했다!", "상대가 시간 초과로 교체할 포켓몬을 자동 선택했다!");
+                int replacement = Enumerable.Range(0, side.Team.Length)
+                    .First(index => index != side.Active && side.Team[index].Hp > 0);
+                if (midTurn)
+                {
+                    CompleteMidTurnSwitch(room, side, replacement);
+                    return;
+                }
+                SendInReplacement(room, side, replacement);
             }
             else
-                side.SkipTurn = true;
+            {
+                BattleSide other = GetOther(room, side);
+                int[] available = Enumerable.Range(1, side.Current.Moves.Length)
+                    .Where(slot => MoveBlockedBy(side, other, slot) == null).ToArray();
+                side.Struggling = available.Length == 0;
+                int slot = side.Struggling ? 1 : available[Random.Shared.Next(available.Length)];
+                side.ChosenMove = slot;
+                string name = side.Struggling ? data.MovesById[StruggleMoveId].Name : side.Current.Moves[slot - 1].Move.Name;
+                string selected = WithJosa(name, "을", "를");
+                Log(room, side, $"시간 초과로 {selected} 자동 선택했다!", $"상대가 시간 초과로 {selected} 자동 선택했다!");
+            }
         }
 
         if (forcedSwitch)
@@ -110,7 +103,7 @@ partial class RoomManager
                 StartTurn(room);
         }
         else
-            TryResolveTurn(room);   // 늦은 쪽은 쉬고 상대의 행동과 턴 끝 처리만 진행한다.
+            TryResolveTurn(room);
     }
 
     // BATTLE_END <WIN|LOSE|DRAW> TIMEOUT

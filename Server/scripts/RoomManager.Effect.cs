@@ -4,9 +4,9 @@
 partial class RoomManager
 {
     private const int DisableMoveId = 50, EncoreMoveId = 227, TormentMoveId = 259, TauntMoveId = 269,
-        ImprisonMoveId = 286, HealBlockMoveId = 377;
+        ImprisonMoveId = 286, HealBlockMoveId = 377, SpiteMoveId = 180;
     private const int LeechSeedMoveId = 73, NightmareMoveId = 171, CurseMoveId = 174, PerishSongMoveId = 195,
-        DestinyBondMoveId = 194;
+        DestinyBondMoveId = 194, GrudgeMoveId = 288;
     private const int MindReaderMoveId = 170, LockOnMoveId = 199, ForesightMoveId = 193, OdorSleuthMoveId = 316,
         MiracleEyeMoveId = 357, TelekinesisMoveId = 477, MagnetRiseMoveId = 393;
     private const int PowderMoveId = 600, ElectrifyMoveId = 582, SnatchMoveId = 289;
@@ -17,8 +17,8 @@ partial class RoomManager
     // UseEffectMove가 처리하는 변화 기술
     private static readonly HashSet<int> EffectMoveIds =
     [
-        DisableMoveId, EncoreMoveId, TormentMoveId, TauntMoveId, ImprisonMoveId, HealBlockMoveId,
-        LeechSeedMoveId, NightmareMoveId, CurseMoveId, PerishSongMoveId, DestinyBondMoveId,
+        DisableMoveId, EncoreMoveId, TormentMoveId, TauntMoveId, ImprisonMoveId, HealBlockMoveId, SpiteMoveId,
+        LeechSeedMoveId, NightmareMoveId, CurseMoveId, PerishSongMoveId, DestinyBondMoveId, GrudgeMoveId,
         MindReaderMoveId, LockOnMoveId, ForesightMoveId, OdorSleuthMoveId, MiracleEyeMoveId, TelekinesisMoveId,
         MagnetRiseMoveId, PowderMoveId, ElectrifyMoveId, SnatchMoveId,
         SplashMoveId, PowerTrickMoveId, TopsyTurvyMoveId, HealPulseMoveId, RototillerMoveId, FlowerShieldMoveId
@@ -53,12 +53,12 @@ partial class RoomManager
                 }
                 target.DisabledSlot = lastSlot;
                 target.DisableTurns = target.MovedThisTurn ? 5 : 4;
-                LogPokemon(room, defender, $"{target.Info.Name}의 {WithJosa(target.Moves[lastSlot - 1].Name, "은", "는")} 쓸 수 없게 되었다!");
+                LogPokemon(room, defender, $"{target.Info.Name}의 {WithJosa(target.Moves[lastSlot - 1].Move.Name, "은", "는")} 쓸 수 없게 되었다!");
                 break;
             case EncoreMoveId:
                 // 상대가 마지막으로 쓴 기술을 3턴 동안 계속 쓰게 한다. 이번 턴에 아직 행동하지 않았으면 그 기술로 바뀐다.
                 if (target.LastMoveSlot is not int encoreSlot || target.EncoreTurns > 0 ||
-                    EncoreFailMoveIds.Contains(target.Moves[encoreSlot - 1].Id))
+                    target.Moves[encoreSlot - 1].Pp == 0 || EncoreFailMoveIds.Contains(target.Moves[encoreSlot - 1].Move.Id))
                 {
                     Fail();
                     break;
@@ -103,6 +103,15 @@ partial class RoomManager
                 }
                 target.HealBlockTurns = 5;
                 LogPokemon(room, defender, $"{targetSubject} 회복을 봉인당했다!");
+                break;
+            case SpiteMoveId:
+                if (target.LastPpSlot is not { Pp: > 0 } lastUsed || !target.Moves.Contains(lastUsed))
+                {
+                    Fail();
+                    break;
+                }
+                int spent = lastUsed.SpendPp(4);
+                LogPokemon(room, defender, $"{target.Info.Name}의 {lastUsed.Move.Name} PP가 {spent} 줄었다!");
                 break;
 
             // ── 턴마다 효과 ──
@@ -162,6 +171,10 @@ partial class RoomManager
             case DestinyBondMoveId:
                 user.DestinyBond = true;
                 LogPokemon(room, attacker, $"{userSubject} 상대를 길동무로 삼으려 하고 있다!");
+                break;
+            case GrudgeMoveId:
+                user.Grudge = true;
+                LogPokemon(room, attacker, $"{userSubject} 상대에게 원념을 품기 시작했다!");
                 break;
 
             // ── 명중·땅 ──
@@ -273,17 +286,19 @@ partial class RoomManager
         }
     }
 
-    // 지금 그 슬롯의 기술을 쓸 수 없는 이유(사슬묶기·앙코르·트집·도발·회복봉인·봉인). 쓸 수 있으면 null
+    // 지금 그 슬롯의 기술을 쓸 수 없는 이유. 쓸 수 있으면 null
     private string? MoveBlockedBy(BattleSide side, BattleSide other, int slot)
     {
         BattlePokemon pokemon = side.Current;
-        PokemonMoveInfo move = pokemon.Moves[slot - 1];
+        BattleMoveSlot selected = pokemon.Moves[slot - 1];
+        PokemonMoveInfo move = selected.Move;
+        if (selected.Pp == 0) return "PP 부족";
         if (pokemon.DisabledSlot == slot) return "사슬묶기";
         if (pokemon.EncoreTurns > 0 && pokemon.EncoreSlot != slot) return "앙코르";
-        if (pokemon.Tormented && pokemon.LastMoveSlot is int last && pokemon.Moves[last - 1].Id == move.Id) return "트집";
+        if (pokemon.Tormented && pokemon.LastMoveSlot is int last && pokemon.Moves[last - 1].Move.Id == move.Id) return "트집";
         if (pokemon.TauntTurns > 0 && move.Category == "변화") return "도발";
         if (pokemon.HealBlockTurns > 0 && HasFlag(move, "heal")) return "회복봉인";
-        if (other.Current.Imprisoning && other.Current.Hp > 0 && other.Current.Moves.Any(known => known.Id == move.Id)) return "봉인";
+        if (other.Current.Imprisoning && other.Current.Hp > 0 && other.Current.Moves.Any(known => known.Move.Id == move.Id)) return "봉인";
         return null;
     }
 
@@ -348,9 +363,10 @@ partial class RoomManager
                 pokemon.DisabledSlot = null;
                 LogPokemon(room, side, $"{name}의 사슬묶기가 풀렸다!");
             }
-            if (pokemon.EncoreTurns > 0 && --pokemon.EncoreTurns == 0)
+            if (pokemon.EncoreSlot is int encoreSlot && (--pokemon.EncoreTurns == 0 || pokemon.Moves[encoreSlot - 1].Pp == 0))
             {
                 pokemon.EncoreSlot = null;
+                pokemon.EncoreTurns = 0;
                 LogPokemon(room, side, $"{name}의 앙코르 효과가 풀렸다!");
             }
             if (pokemon.TauntTurns > 0 && --pokemon.TauntTurns == 0)

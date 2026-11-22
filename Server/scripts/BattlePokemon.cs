@@ -6,10 +6,9 @@ sealed class BattlePokemon
 {
     public const int Level = 50;
 
-    public PokemonInfo Info { get; }
+    public PokemonInfo Info { get; private set; }
     // 흉내내기·변신으로 바뀔 수 있고, 교체하면 원래 기술로 돌아온다(스케치는 원래 기술도 바꾼다).
-    // 메타몽처럼 4개보다 적을 수 있고, 변신하면 상대의 기술 수만큼으로 바뀐다.
-    public PokemonMoveInfo[] Moves { get; set; }
+    public BattleMoveSlot[] Moves { get; private set; }
     public int MaxHp { get; }
     public int Hp { get; set; }
     // 파워셰어·가드셰어·파워트릭·변신으로 바뀔 수 있고, 교체하면 원래 값으로 돌아온다.
@@ -73,6 +72,7 @@ sealed class BattlePokemon
     public int PresentPower { get; set; }   // 이번에 나온 프레젠트 위력
     public PokemonMoveInfo? ChargingMove { get; set; }      // 모으는 중인 2턴 기술 (손가락흔들기 등으로 나온 기술 포함)
     public int? LastMoveSlot { get; set; }                  // 마지막으로 쓴 기술 슬롯 (사슬묶기·앙코르·트집)
+    public BattleMoveSlot? LastPpSlot { get; set; }         // 마지막으로 PP를 사용한 기술 (원한)
     public PokemonMoveInfo? LastExecutedMove { get; set; }  // 마지막으로 실제로 나간 기술 (따라하기·흉내내기·텍스처2)
     // 기술 제한
     public int? DisabledSlot { get; set; }  // 사슬묶기로 쓸 수 없는 슬롯
@@ -89,6 +89,7 @@ sealed class BattlePokemon
     public bool Cursed { get; set; }        // 저주(고스트): 턴 끝에 1/4 데미지
     public int PerishCount { get; set; }    // 멸망의노래: 0이 아니면 턴 끝마다 1씩 줄고 0이 되면 쓰러진다.
     public bool DestinyBond { get; set; }   // 길동무: 다음 행동 전까지 상대 공격에 쓰러지면 상대도 쓰러진다.
+    public bool Grudge { get; set; }        // 원념: 다음 행동 전까지 쓰러뜨린 상대 기술의 PP를 없앤다.
     public bool Raging { get; set; }        // 분노: 다른 기술을 쓰기 전까지 공격을 맞으면 공격 +1
     public int UproarTurns { get; set; }    // 소란피기: 남은 턴. 그동안 아무도 잠들 수 없다.
     // 명중·회피·땅
@@ -99,7 +100,8 @@ sealed class BattlePokemon
     public int TelekinesisTurns { get; set; }   // 텔레키네시스: 떠올라 반드시 맞고 땅 기술은 맞지 않는다.
     public int MagnetRiseTurns { get; set; }    // 전자부유: 땅 기술을 맞지 않는다.
     public bool SmackedDown { get; set; }   // 떨어뜨리기: 땅에 떨어져 땅 기술을 맞는다.
-    public bool Transformed { get; set; }   // 변신
+    public PokemonInfo? TransformedInto { get; private set; }
+    public bool Transformed => TransformedInto != null;
     public bool PowerTricked { get; set; }  // 파워트릭: 공격과 방어가 바뀌어 있다.
     // 이번 턴에만 유지되는 상태
     public string? ProtectKind { get; set; }    // 킹실드(kings)·니들가드(spiky)로 막는 중
@@ -121,29 +123,72 @@ sealed class BattlePokemon
         PhysicalDamageTaken = SpecialDamageTaken = 0;
     }
 
-    private readonly int attack, defense, spAttack, spDefense, speed;
-    private readonly PokemonMoveInfo[] originalMoves;
+    private const int CopiedMovePp = 5;
+    private readonly BattleMoveSlot[] originalMoves;
 
     public BattlePokemon(PokemonInfo info, PokemonMoveInfo[] moves)
     {
         Info = info;
-        Moves = moves;
-        originalMoves = moves.ToArray();
+        originalMoves = moves.Select(move => new BattleMoveSlot(move)).ToArray();
+        Moves = originalMoves.ToArray();
         MaxHp = Hp = (2 * info.BaseHp + 31) * Level / 100 + Level + 10;
-        Attack = attack = CalculateStat(info.BaseAttack);
-        Defense = defense = CalculateStat(info.BaseDefense);
-        SpAttack = spAttack = CalculateStat(info.BaseSpAttack);
-        SpDefense = spDefense = CalculateStat(info.BaseSpDefense);
-        Speed = speed = CalculateStat(info.BaseSpeed);
+        (Attack, Defense, SpAttack, SpDefense, Speed) = FormStats;
         BaseTypes = OriginalTypes;
     }
 
     private int[] OriginalTypes => Info.Type2Id is int type2 ? [Info.Type1Id, type2] : [Info.Type1Id];
 
+    private (int Attack, int Defense, int SpAttack, int SpDefense, int Speed) FormStats =>
+        (CalculateStat(Info.BaseAttack), CalculateStat(Info.BaseDefense), CalculateStat(Info.BaseSpAttack),
+            CalculateStat(Info.BaseSpDefense), CalculateStat(Info.BaseSpeed));
+
+    public void MegaEvolve(PokemonInfo form)
+    {
+        var previous = FormStats;
+        bool usesFormTypes = BaseTypes.SequenceEqual(OriginalTypes);
+        Info = form;
+        var next = FormStats;
+        // 파워트릭 등으로 바뀐 현재 능력치에는 폼에 따른 차이만 반영한다.
+        int attackChange = next.Attack - previous.Attack, defenseChange = next.Defense - previous.Defense;
+        Attack += PowerTricked ? defenseChange : attackChange;
+        Defense += PowerTricked ? attackChange : defenseChange;
+        SpAttack += next.SpAttack - previous.SpAttack;
+        SpDefense += next.SpDefense - previous.SpDefense;
+        Speed += next.Speed - previous.Speed;
+        if (usesFormTypes)
+            BaseTypes = OriginalTypes;
+    }
+
     public int GetStage(Stat stat) => Stages[(int)stat];
 
-    // 스케치: 이 슬롯의 기술을 교체해도 남게 바꾼다.
-    public void LearnPermanently(int slot, PokemonMoveInfo move) => Moves[slot - 1] = originalMoves[slot - 1] = move;
+    public void TransformInto(BattlePokemon target)
+    {
+        TransformedInto = target.Info;
+        BaseTypes = target.Types.ToArray();
+        AddedType = null;
+        (Attack, Defense, SpAttack, SpDefense, Speed) =
+            (target.Attack, target.Defense, target.SpAttack, target.SpDefense, target.Speed);
+        target.Stages.CopyTo(Stages, 0);
+        // 상대의 기술 개수까지 따라 한다. 사라진 슬롯을 참조하는 제한은 풀린다.
+        Moves = target.Moves.Select(slot => new BattleMoveSlot(slot.Move, CopiedMovePp)).ToArray();
+        if (LastMoveSlot > Moves.Length)
+            LastMoveSlot = null;
+        if (DisabledSlot > Moves.Length)
+        {
+            DisabledSlot = null;
+            DisableTurns = 0;
+        }
+        if (EncoreSlot > Moves.Length)
+        {
+            EncoreSlot = null;
+            EncoreTurns = 0;
+        }
+    }
+
+    public void LearnTemporarily(int slot, PokemonMoveInfo move) => Moves[slot - 1] = new BattleMoveSlot(move, CopiedMovePp);
+
+    // 스케치: 교체해도 복사한 기술을 유지한다.
+    public void LearnPermanently(int slot, PokemonMoveInfo move) => Moves[slot - 1] = originalMoves[slot - 1] = new BattleMoveSlot(move);
 
     public void OnSwitchOut()
     {
@@ -155,17 +200,19 @@ sealed class BattlePokemon
         SubstituteHp = 0;
         Protected = Enduring = MagicCoat = UsedProtectThisTurn = Flinched = false;
         ProtectStreak = 0;
-        (Attack, Defense, SpAttack, SpDefense, Speed) = (attack, defense, spAttack, spDefense, speed);
+        (Attack, Defense, SpAttack, SpDefense, Speed) = FormStats;
         Moves = originalMoves.ToArray();
         BaseTypes = OriginalTypes;
         AddedType = null;
         ChargingMove = LastExecutedMove = null;
         LastMoveSlot = DisabledSlot = EncoreSlot = null;
+        LastPpSlot = null;
         DisableTurns = EncoreTurns = TauntTurns = HealBlockTurns = PerishCount = UproarTurns = 0;
-        Tormented = Imprisoning = LeechSeeded = Nightmare = Cursed = DestinyBond = Raging = false;
+        Tormented = Imprisoning = LeechSeeded = Nightmare = Cursed = DestinyBond = Grudge = Raging = false;
         LockOnTarget = null;
         LockOnTurns = TelekinesisTurns = MagnetRiseTurns = 0;
-        Identified = MiracleEye = SmackedDown = Transformed = PowerTricked = false;
+        Identified = MiracleEye = SmackedDown = PowerTricked = false;
+        TransformedInto = null;
         ProtectKind = null;
         ConfusionTurns = 0;
         Infatuated = false;

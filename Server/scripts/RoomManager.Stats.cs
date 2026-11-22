@@ -29,7 +29,7 @@ partial class RoomManager
                !SpecialMoveIds.Contains(move.Id) && !ConditionalStatMoveIds.Contains(move.Id);
     }
 
-    private const int ReflectMoveId = 115, LightScreenMoveId = 113, TailwindMoveId = 366, TrickRoomMoveId = 433,
+    private const int ReflectMoveId = 115, LightScreenMoveId = 113, TailwindMoveId = 366,
         MistMoveId = 54, FocusEnergyMoveId = 116, LuckyChantMoveId = 381, HazeMoveId = 114, ClearSmogMoveId = 499,
         DefogMoveId = 432, PowerSplitMoveId = 471, GuardSplitMoveId = 470, BatonPassMoveId = 226,
         PsychUpMoveId = 244, PowerSwapMoveId = 384, GuardSwapMoveId = 385, HeartSwapMoveId = 391,
@@ -38,7 +38,7 @@ partial class RoomManager
     // UseSpecialMove에서 처리하는 변화 기술
     private static readonly HashSet<int> SpecialMoveIds =
     [
-        ReflectMoveId, LightScreenMoveId, TailwindMoveId, TrickRoomMoveId, MistMoveId, FocusEnergyMoveId,
+        ReflectMoveId, LightScreenMoveId, TailwindMoveId, MistMoveId, FocusEnergyMoveId,
         LuckyChantMoveId, HazeMoveId, DefogMoveId, PowerSplitMoveId, GuardSplitMoveId, BatonPassMoveId,
         PsychUpMoveId, PowerSwapMoveId, GuardSwapMoveId, HeartSwapMoveId,
         BellyDrumMoveId, MementoMoveId, StockpileMoveId, ChargeMoveId, AcupressureMoveId
@@ -207,11 +207,6 @@ partial class RoomManager
                     user.FocusEnergy = true;
                     LogPokemon(room, attacker, $"{subject} 의욕이 넘치고 있다!");
                 }
-                break;
-            case TrickRoomMoveId:
-                // 트릭룸 중에 다시 쓰면 원래대로 돌아온다.
-                room.TrickRoomTurns = room.TrickRoomTurns > 0 ? 0 : 5;
-                LogBoth(room, attacker, room.TrickRoomTurns > 0 ? "시공이 뒤틀렸다!" : "뒤틀린 시공이 원래대로 돌아왔다!");
                 break;
             case HazeMoveId:
                 Array.Clear(user.Stages);

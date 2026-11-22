@@ -23,13 +23,20 @@ static class BattlePanelRenderer
         return Box([markers + pokemon.Name + status, $"HP [{bar}] {pokemon.CurrentHp}/{pokemon.MaxHp}"]);
     }
 
-    public static string[] Moves(IReadOnlyList<MoveView> moves)
+    public static string[] Moves(IReadOnlyList<MoveView> moves, bool showMega)
     {
-        const int cellWidth = ContentWidth / 2;
-        string Cell(int index) => index >= moves.Count ? new string(' ', cellWidth) :
-            $"{index + 1}. " + TypeColorRenderer.Colorize("■", moves[index].Type.ColorRgb) + " " +
-            TextRenderer.FitToWidth(moves[index].Name, cellWidth - 5);
-        return Box([Cell(0) + Cell(1), Cell(2) + Cell(3)], "기술");
+        var lines = moves.Select((move, index) =>
+        {
+            string name = $"{index + 1}. " + TypeColorRenderer.Colorize("■", move.Type.ColorRgb) + " " + move.Name;
+            if (move.Pp is not int pp || move.MaxPp is not int maxPp)
+                return name;
+            string usage = $"PP {pp}/{maxPp}";
+            int padding = Math.Max(1, ContentWidth - TextRenderer.DisplayWidth(name) - usage.Length);
+            return name + new string(' ', padding) + usage;
+        }).ToList();
+        if (showMega)
+            lines.Add("5. 메가진화");
+        return Box(lines, moves.Count > 0 && moves.All(move => move.Pp == 0) ? "기술 (선택 시 발버둥)" : "기술");
     }
 
     public static string[] Switches(BattleView battle, IReadOnlyList<int> candidates, bool showBack)
@@ -64,7 +71,8 @@ static class BattlePanelRenderer
             new(rightX, statusY, Pokemon(battle.Opponent)),
             new(leftX, statusY + 4, SideEffects(battle.SideEffects)),
             new(rightX, statusY + 4, SideEffects(battle.OpponentSideEffects)),
-            new(leftX, statusY + 5, switchList == null ? Moves(active.Moves) : Switches(battle, switchList, showBack)),
+            new(leftX, statusY + 5, switchList == null
+                ? Moves(active.Moves, showBack && battle.CanMegaEvolve) : Switches(battle, switchList, showBack)),
             new(leftX + Width + 3, statusY + 1, StatChanges(active.Pokemon)),
             new(rightX - changesWidth - 3, statusY + 1, opponentChanges)
         ];
