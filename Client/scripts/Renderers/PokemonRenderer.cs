@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.RegularExpressions;
+using Pokemon.Protocol;
 
 namespace Client;
 
@@ -19,8 +20,11 @@ static class PokemonRenderer
         "    ??    ",
     ];
 
+    public static string[] Load(PokemonView pokemon, int maxRows, int maxColumns, bool flip) =>
+        Load(pokemon.Appearance?.PokemonId ?? pokemon.PokemonId, pokemon.Appearance?.SpeciesId ?? pokemon.SpeciesId,
+            maxRows, maxColumns, flip);
+
     // 폼 번호의 그림 → 같은 종(전국도감 번호)의 그림 → 물음표 순으로 찾는다.
-    // 리전폼·메가진화 등 다른 폼은 아직 그림이 없어 기본 폼 그림을 쓴다.
     public static string[] Load(int pokemonId, int speciesId, int maxRows, int maxColumns, bool flip)
     {
         string? path = new[] { pokemonId, speciesId }

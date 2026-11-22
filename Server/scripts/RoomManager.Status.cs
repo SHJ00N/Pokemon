@@ -30,29 +30,17 @@ partial class RoomManager
     private const int HealBellMoveId = 215, AromatherapyMoveId = 312, PsychoShiftMoveId = 375;
     private static readonly HashSet<int> StatusCureMoveIds = [HealBellMoveId, AromatherapyMoveId, PsychoShiftMoveId, RefreshMoveId];
 
-    // 특성·지닌 도구가 없고 싱글배틀만 하는 이 게임에서는 효과가 없어서 항상 실패하는 기술
-    // 특성: 역할, 스킬스왑, 위액, 고민씨, 심플빔, 동료만들기
-    // 도구: 트릭, 바꿔치기, 리사이클, 금제, 기프트패스, 자연의은혜
-    // 더블배틀 전용: 날따름, 분노가루, 도우미, 사이드체인지, 아로마미스트, 자기장조작, 당신먼저, 순서미루기
-    private static readonly HashSet<int> FailingMoveIds =
-    [
-        272, 285, 380, 388, 493, 494,
-        271, 415, 278, 373, 516, 363,
-        266, 476, 270, 502, 597, 602, 495, 511,
-        478,    // 매직룸: 지닌 도구의 효과를 없애는 공간
-        562,    // 트림: 나무열매를 먹은 뒤에만 쓸 수 있다.
-        100,    // 순간이동: 트레이너 배틀에서는 실패한다.
-        180, 288    // 원한·원념: PP를 깎는 기술인데 이 게임에는 PP가 없다.
-    ];
+    // 싱글배틀에서 실패하는 기술: 날따름, 분노가루, 도우미, 사이드체인지, 아로마미스트, 자기장조작, 당신먼저, 순서미루기
+    private static readonly HashSet<int> FailingMoveIds = [266, 476, 270, 502, 597, 602, 495, 511];
 
     // 잠꼬대: 잠든 동안 자신의 다른 기술 하나를 무작위로 쓴다.
     private const int SleepTalkMoveId = 214;
-    // 잠꼬대로 나오지 않는 기술 (6세대): 잠꼬대, 소란피기, 힘껏펀치, 참기, 수다, 트림, 손잡기, 다른 기술을 부르는 기술
+    // 잠꼬대로 나오지 않는 기술 (6세대): 잠꼬대, 소란피기, 힘껏펀치, 참기, 수다, 손잡기, 다른 기술을 부르는 기술
     // (조수·흉내쟁이·선취·손가락흔들기·흉내내기·따라하기·자연의힘·스케치), 2턴 기술(칼바람·공중날기·솔라빔·구멍파기·
     // 로켓박치기·불새·다이빙·뛰어오르기·섀도다이브·프리폴·프리즈볼트·콜드플레어·고스트다이브·지오컨트롤)
     private static readonly HashSet<int> SleepTalkBannedMoveIds =
     [
-        214, 253, 264, 117, 448, 562, 607, 274, 383, 382, 118, 102, 119, 267, 166,
+        214, 253, 264, 117, 448, 607, 274, 383, 382, 118, 102, 119, 267, 166,
         13, 19, 76, 91, 130, 143, 291, 340, 467, 507, 553, 554, 566, 601
     ];
 
@@ -65,14 +53,16 @@ partial class RoomManager
         // 이번 턴에 먼저 쓰러졌거나, 상대가 이미 쓰러졌으면 기술을 쓰지 않는다.
         if (user.Hp == 0 || defender.Current.Hp == 0)
             return;
+        ApplyChosenMegaEvolution(room, attacker);
         user.MovedThisTurn = true;
-        user.DestinyBond = false;   // 길동무는 다음 행동 전까지만
+        user.DestinyBond = user.Grudge = false;
 
         int slot = attacker.ChosenMove!.Value;
         // 앙코르: 고른 기술 대신 앙코르 받은 기술을 쓴다. 쓸 수 있는 기술이 없으면 발버둥
-        if (user.EncoreTurns > 0 && user.EncoreSlot is int encoreSlot && !attacker.Struggling)
+        if (user.EncoreSlot is int encoreSlot && user.LockedSlot == null && user.ChargingSlot == null && !attacker.Struggling)
             slot = encoreSlot;
-        PokemonMoveInfo move = attacker.Struggling ? data.MovesById[StruggleMoveId] : user.Moves[slot - 1];
+        BattleMoveSlot? ppSlot = attacker.Struggling ? null : user.Moves[slot - 1];
+        PokemonMoveInfo move = ppSlot?.Move ?? data.MovesById[StruggleMoveId];
         string subject = WithJosa(user.Info.Name, "은", "는");
         // 파괴광선 등을 맞힌 다음 턴은 반동으로 움직이지 못한다. 프리폴에 붙잡힌 포켓몬도 움직이지 못한다.
         if (user.RechargeSlot != null)
@@ -100,9 +90,9 @@ partial class RoomManager
         bool continuing = user.ChargingSlot != null && user.ChargingMove != null;
         if (continuing)
             move = user.ChargingMove!;
-        // 사슬묶기·도발·트집·회복봉인·봉인: 기술을 고른 뒤에 걸렸으면 그 기술을 쓰지 못한다.
-        if (!attacker.Struggling && !continuing && user.LockedSlot == null &&
-            MoveBlockedBy(attacker, defender, slot) is string cause)
+        // 기술을 고른 뒤에 사용 제한이 생기거나 PP가 바닥났을 수 있다.
+        bool startsMove = !continuing && user.LockedSlot == null;
+        if (ppSlot != null && startsMove && MoveBlockedBy(attacker, defender, slot) is string cause)
         {
             LogPokemon(room, attacker, $"{subject} {cause} 때문에 {WithJosa(move.Name, "을", "를")} 쓸 수 없다!");
             return;
@@ -113,8 +103,11 @@ partial class RoomManager
             LogPokemon(room, attacker, $"{subject} 기합이 흐트러져서 기술을 쓸 수 없었다!");
             return;
         }
+        if (startsMove)
+            ppSlot?.SpendPp(1);
         user.UsedMoveIds.Add(move.Id);
-        user.LastMoveSlot = attacker.Struggling ? null : slot;
+        user.LastMoveSlot = ppSlot != null ? slot : null;
+        user.LastPpSlot = ppSlot;
         if (move.Id != RageMoveId)
             user.Raging = false;    // 분노는 다른 기술을 쓰면 끝난다.
 
@@ -218,7 +211,7 @@ partial class RoomManager
         else
         {
             BreakProtection(room, defender, move);
-            landed = UseDamagingMove(room, attacker, defender, move);
+            landed = UseDamagingMove(room, attacker, defender, move, ppSlot);
         }
 
         // 발버둥: 최대 HP의 1/4만큼 반동을 받는다.
@@ -278,7 +271,8 @@ partial class RoomManager
     {
         BattlePokemon user = side.Current;
         LogPokemon(room, side, $"{user.Info.Name}의 {sleepTalk.Name}!");
-        PokemonMoveInfo[] candidates = user.Moves.Where(move => !SleepTalkBannedMoveIds.Contains(move.Id)).ToArray();
+        PokemonMoveInfo[] candidates = user.Moves.Select(slot => slot.Move)
+            .Where(move => !SleepTalkBannedMoveIds.Contains(move.Id)).ToArray();
         if (user.Status != Sleep || candidates.Length == 0)
         {
             LogBoth(room, side, "하지만 실패했다!");
@@ -288,7 +282,8 @@ partial class RoomManager
     }
 
     // 공격이 맞았으면(대타가 맞은 것 포함) true
-    private bool UseDamagingMove(GameRoom room, BattleSide attacker, BattleSide defender, PokemonMoveInfo move)
+    private bool UseDamagingMove(GameRoom room, BattleSide attacker, BattleSide defender, PokemonMoveInfo move,
+        BattleMoveSlot? ppSlot)
     {
         BattlePokemon user = attacker.Current, target = defender.Current;
         // 속이기는 나온 뒤 첫 행동에서만, 코골기는 자신이 잠들어 있을 때만, 꿈먹기는 상대가 잠들어 있을 때만,
@@ -346,7 +341,14 @@ partial class RoomManager
         if (endured)
             LogPokemon(room, defender, $"{WithJosa(target.Info.Name, "은", "는")} 공격을 버텼다!");
         if (target.Hp == 0)
+        {
             Faint(room, defender);
+            if (target.Grudge && ppSlot != null)
+            {
+                ppSlot.SpendPp(ppSlot.Pp);
+                LogPokemon(room, attacker, $"원념으로 {user.Info.Name}의 {ppSlot.Move.Name} PP가 모두 사라졌다!");
+            }
+        }
         // 길동무: 길동무를 쓴 포켓몬을 쓰러뜨리면 공격한 포켓몬도 쓰러진다.
         if (target.Hp == 0 && target.DestinyBond && user.Hp > 0)
         {
@@ -516,6 +518,7 @@ partial class RoomManager
         int[] userStages = user.Stages.ToArray(), targetStages = target.Stages.ToArray();
         bool userFocusEnergy = user.FocusEnergy, targetFocusEnergy = target.FocusEnergy;
         int[] buffsBefore = GetBuffLevels(attacker);
+        bool fieldMoveSucceeded = false;
         // 성장: 쾌청이면 공격·특수공격이 2단계씩 오른다.
         if (move.Id == GrowthMoveId && room.Weather == Sun)
             statChanges = statChanges.Select(change => (change.Stat, change.Change * 2, change.Target)).ToArray();
@@ -529,7 +532,7 @@ partial class RoomManager
                 user.DefenseCurled = true;  // 웅크리기: 구르기·아이스볼 위력 2배
         }
         else if (FieldMoveIds.Contains(move.Id))
-            UseFieldMove(room, attacker, move);
+            fieldMoveSucceeded = UseFieldMove(room, attacker, move);
         else if (SwitchMoveIds.Contains(move.Id))
             UseSwitchMove(room, attacker, defender, move);
         else if (EffectMoveIds.Contains(move.Id))
@@ -546,7 +549,7 @@ partial class RoomManager
             UseStatusCureMove(room, attacker, defender, move);
         bool userRankRaised = SendStatEffects(room, attacker, user, userStages, userFocusEnergy, move.TypeId);
         SendStatEffects(room, defender, target, targetStages, targetFocusEnergy, move.TypeId);
-        if (!userRankRaised && ReferenceEquals(attacker.Current, user) && HasNewBuff(attacker, buffsBefore))
+        if (!userRankRaised && ReferenceEquals(attacker.Current, user) && (fieldMoveSucceeded || HasNewBuff(attacker, buffsBefore)))
         {
             attacker.Player.QueueMessage($"BATTLE_BUFF {move.TypeId} SELF");
             defender.Player.QueueMessage($"BATTLE_BUFF {move.TypeId} OPPONENT");

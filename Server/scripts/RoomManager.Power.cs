@@ -34,7 +34,8 @@ partial class RoomManager
         BattlePokemon defender = defenderSide.Current;
         int? power = move.Id switch
         {
-            TrumpCardMoveId => TrumpCardPower,
+            // 마지막수단: 이번 사용분을 소모한 뒤 남은 PP를 기준으로 계산한다.
+            TrumpCardMoveId => attacker.LastPpSlot?.Pp switch { 0 => 200, 1 => 80, 2 => 60, 3 => 50, _ => 40 },
             // 은혜갚기·화풀이: 친밀도가 없는 게임이라 각각 가장 강할 때의 위력 102로 쓴다.
             ReturnMoveId or FrustrationMoveId => 102,
             FlingMoveId => 45,      // 내던지기: 지닌 도구가 없는 게임이라 위력 45로 고정한다.

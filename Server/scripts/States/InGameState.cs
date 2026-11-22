@@ -5,13 +5,15 @@ sealed class InGameState : ClientState
 {
     public override bool HandleCommand(ClientSession session, RoomManager rooms, string command)
     {
-        // 전투 중 기술 사용: USE_MOVE <기술 슬롯 1~4>. 배턴터치·유턴 등의 교체할 포켓몬은 턴 도중에 SWITCH로 고른다.
+        // USE_MOVE <기술 슬롯 1~4> [MEGA]. 턴 도중 교체할 포켓몬은 SWITCH로 고른다.
         if (command.StartsWith("USE_MOVE "))
         {
-            if (!int.TryParse(command[9..], out int slot) || slot is < 1 or > 4)
+            string[] parts = command.Split(' ', 3);
+            bool megaEvolve = parts.Length == 3 && parts[2] == "MEGA";
+            if (!int.TryParse(parts[1], out int slot) || slot is < 1 or > PokemonSelection.MaxMoves || (parts.Length == 3 && !megaEvolve))
                 session.QueueMessage("ERROR 기술 번호는 1~4입니다.");
             else
-                rooms.UseMove(session, slot);
+                rooms.UseMove(session, slot, megaEvolve);
             return true;
         }
 
@@ -29,7 +31,7 @@ sealed class InGameState : ClientState
         {
             try
             {
-                // 포켓몬 3마리와 각각의 기술 4개 선택
+                // 포켓몬 3마리와 각각의 기술 최대 4개 선택
                 PokemonSelection[]? team = JsonSerializer.Deserialize<PokemonSelection[]>(command[12..]);
                 rooms.SelectTeam(session, team);
             }

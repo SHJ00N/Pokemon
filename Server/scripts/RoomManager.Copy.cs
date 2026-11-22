@@ -23,9 +23,9 @@ partial class RoomManager
     // 이 게임에서는 여러 턴 이어서 쓰는 구르기·아이스볼·참기·소란피기도 뺀다.
     private static readonly HashSet<int> CallBannedMoveIds =
     [
-        495, 274, 516, 448, 383, 68, 343, 194, 197, 203, 364, 264, 266, 553, 270, 554, 588, 382, 118, 102, 243, 119,
-        267, 182, 511, 501, 476, 547, 548, 166, 214, 555, 289, 173, 596, 165, 415, 546, 168, 144, 271, 557, 469,
-        562, 509, 525, 46, 18, 340, 91, 291, 19, 566, 467, 507, 591, 592, 593, 614, 615, 617, 621,
+        495, 274, 448, 383, 68, 343, 194, 197, 203, 364, 264, 266, 553, 270, 554, 588, 382, 118, 102, 243, 119,
+        267, 182, 511, 501, 476, 547, 548, 166, 214, 555, 289, 173, 596, 165, 546, 168, 144, 557, 469,
+        509, 525, 46, 18, 340, 91, 291, 19, 566, 467, 507, 591, 592, 593, 614, 615, 617, 621,
         205, 301, 117, 253
     ];
     // 따라 할 수 없는 기술 (흉내내기·스케치): 흉내내기, 스케치, 변신, 발버둥, 손가락흔들기, 수다
@@ -40,7 +40,7 @@ partial class RoomManager
         {
             case ConversionMoveId:
                 // 첫 번째 기술의 타입이 된다(6세대).
-                ChangeTypes(room, attacker, user, [user.Moves[0].TypeId]);
+                ChangeTypes(room, attacker, user, [user.Moves[0].Move.TypeId]);
                 break;
             case Conversion2MoveId:
                 // 상대가 마지막으로 쓴 기술에 강한(반감·무효) 타입 중 하나가 된다.
@@ -80,27 +80,22 @@ partial class RoomManager
                 break;
 
             case TransformMoveId:
-                // 상대의 타입·능력치(HP 제외)·랭크·기술을 그대로 따라 한다. 대타가 있거나 어느 한쪽이 이미 변신했으면 실패
+                // 상대에게 대타가 있거나 어느 한쪽이 이미 변신했으면 실패한다.
                 if (user.Transformed || target.Transformed || target.SubstituteHp > 0)
                 {
                     LogBoth(room, attacker, "하지만 실패했다!");
                     break;
                 }
-                user.BaseTypes = target.Types.ToArray();
-                user.AddedType = null;
-                (user.Attack, user.Defense, user.SpAttack, user.SpDefense, user.Speed) =
-                    (target.Attack, target.Defense, target.SpAttack, target.SpDefense, target.Speed);
-                target.Stages.CopyTo(user.Stages, 0);
-                target.Moves.CopyTo(user.Moves, 0);
-                user.Transformed = true;
+                user.TransformInto(target);
                 LogPokemon(room, attacker, $"{userSubject} 상대 {WithJosa(target.Info.Name, "으로", "로")} 변신했다!");
                 break;
 
             case MimicMoveId:
             case SketchMoveId:
                 // 상대가 마지막으로 쓴 기술을 이 슬롯에 배운다. 흉내내기는 교체할 때까지, 스케치는 계속
-                if (target.LastExecutedMove is not PokemonMoveInfo copied || MimicBannedMoveIds.Contains(copied.Id) ||
-                    user.Moves.Any(known => known.Id == copied.Id))
+                if ((move.Id == SketchMoveId && user.Transformed) ||
+                    target.LastExecutedMove is not PokemonMoveInfo copied || MimicBannedMoveIds.Contains(copied.Id) ||
+                    user.Moves.Any(known => known.Move.Id == copied.Id))
                 {
                     LogBoth(room, attacker, "하지만 실패했다!");
                     break;
@@ -108,7 +103,7 @@ partial class RoomManager
                 if (move.Id == SketchMoveId)
                     user.LearnPermanently(slot, copied);
                 else
-                    user.Moves[slot - 1] = copied;
+                    user.LearnTemporarily(slot, copied);
                 LogPokemon(room, attacker, $"{userSubject} {WithJosa(copied.Name, "을", "를")} {(move.Id == SketchMoveId ? "스케치했다" : "흉내 냈다")}!");
                 break;
         }
@@ -155,14 +150,14 @@ partial class RoomManager
             case AssistMoveId:
                 // 우리 팀 다른 포켓몬의 기술 중 무작위
                 PokemonMoveInfo[] team = attacker.Team.Where(member => !ReferenceEquals(member, user))
-                    .SelectMany(member => member.Moves).Where(Allowed).ToArray();
+                    .SelectMany(member => member.Moves).Select(slot => slot.Move).Where(Allowed).ToArray();
                 if (team.Length > 0)
                     called = team[Random.Shared.Next(team.Length)];
                 break;
             case MeFirstMoveId:
                 // 상대가 이번 턴에 아직 행동하지 않았고 공격 기술을 골랐으면 그 기술을 위력 1.5배로 먼저 쓴다.
                 if (!target.MovedThisTurn && defender.ChosenMove is int targetSlot && target.RechargeSlot == null &&
-                    target.Moves[targetSlot - 1] is { Category: not "변화" } chosen && Allowed(chosen))
+                    !defender.Struggling && target.Moves[targetSlot - 1].Move is { Category: not "변화" } chosen && Allowed(chosen))
                     called = chosen with { Power = chosen.Power * 3 / 2 };
                 break;
             case NaturePowerMoveId:

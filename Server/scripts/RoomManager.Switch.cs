@@ -84,7 +84,7 @@ partial class RoomManager
                     LogBoth(room, attacker, "하지만 실패했다!");
                     break;
                 }
-                attacker.HealingWish = move.Name;
+                attacker.HealingWish = move;
                 DealDamage(room, attacker, user.Hp);
                 break;
         }
@@ -146,12 +146,19 @@ partial class RoomManager
                 SendStatEffects(room, side, pokemon, before, pokemon.FocusEnergy, TypeIdOf("벌레"));
             }
         }
-        if (pokemon.Hp > 0 && side.HealingWish is string wish)
+        if (pokemon.Hp > 0 && side.HealingWish is { } wish)
         {
             side.HealingWish = null;
             pokemon.Hp = pokemon.MaxHp;
             pokemon.Status = null;
-            LogPokemon(room, side, $"{subject} {WithJosa(wish, "으로", "로")} 체력과 상태이상이 회복되었다!");
+            string recovery = "체력과 상태이상";
+            if (wish.Id == LunarDanceMoveId)
+            {
+                foreach (BattleMoveSlot slot in pokemon.Moves)
+                    slot.RestorePp();
+                recovery = "체력, 상태이상, PP";
+            }
+            LogPokemon(room, side, $"{subject} {WithJosa(wish.Name, "으로", "로")} {recovery}이 회복되었다!");
             SendHealEffect(room, side);
         }
     }

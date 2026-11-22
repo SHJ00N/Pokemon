@@ -15,6 +15,7 @@ sealed class SoundManager : ISoundManager
     public const string HeldItemActivate = "held_item_activate";
     public const string PokeballThrow = "pokeball_throw";
     public const string PokeballRelease = "pokeball_release";
+    public const string MegaEvolution = "mega_evolution";
     public const string StatFall = "stat_fall";
     public const string StatUp = "stat_up";
     public const string StatusBurned = "status_burned";
@@ -90,6 +91,7 @@ sealed class SoundManager : ISoundManager
             LoadSound(HeldItemActivate, Path.Combine("resources", "sounds", "In-Battle Held Item Activate.mp3"));
             LoadSound(PokeballThrow, Path.Combine("resources", "sounds", "pokeball-throw.mp3"));
             LoadSound(PokeballRelease, Path.Combine("resources", "sounds", "In-Battle Recall Switch Pokeball.mp3"));
+            LoadSound(MegaEvolution, Path.Combine("resources", "sounds", "mega-evolution.mp3"));
             LoadSound(StatFall, Path.Combine("resources", "sounds", "Stat Fall Down.mp3"));
             LoadSound(StatUp, Path.Combine("resources", "sounds", "Stat Rise Up.mp3"));
             LoadSound(StatusBurned, Path.Combine("resources", "sounds", "Status Burned.mp3"));

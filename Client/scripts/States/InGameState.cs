@@ -34,7 +34,10 @@ sealed class InGameState : ClientState
 
     protected override string Menu => "\n[게임 중]";
     private PokemonCatalogResponse? catalog;
-    // 포켓몬 3마리를 먼저 모두 고른 뒤, 고른 순서대로 각 포켓몬의 기술 4개를 고른다.
+    private int? generationFilter;
+    private TypeView? typeFilter;
+    private bool megaOnlyFilter;
+    // 포켓몬 3마리를 먼저 모두 고른 뒤, 고른 순서대로 각 포켓몬의 기술을 최대 4개 고른다.
     private readonly List<PokemonCatalogEntry> pickedPokemon = new();
     private readonly List<PokemonSelection> team = new();   // 기술까지 고른 포켓몬
     private readonly List<int> selectedMoves = new();       // 지금 기술을 고르는 포켓몬의 기술
@@ -46,6 +49,7 @@ sealed class InGameState : ClientState
 
     private BattleView? battle;
     private bool withdrawingPlayer;
+    private bool megaEvolutionSelected;
     private BattleMenu menu = BattleMenu.Waiting;
     private BattleMenu menuBeforeWaiting = BattleMenu.Main;  // 서버가 선택을 거절하면 돌아갈 단계
     private BattleMenu menuBeforeSurrender = BattleMenu.Main; // 항복 확인에서 뒤로 가면 돌아갈 단계
@@ -79,14 +83,18 @@ sealed class InGameState : ClientState
         if (battle != null && result == null && animations.HoldInformation) return;
         shownSeconds = RemainingSeconds;
         // 출력 스레드에는 이후 입력·서버 메시지로 바뀌지 않는 시점의 값만 전달한다.
+        PokemonCatalogEntry? target = MoveTarget;
+        PokemonCatalogEntry[] pokemonChoices = catalog != null && battle == null && result == null && !submitted && target == null
+            ? catalog.Pokemon.Where(MatchesPokemonFilters).ToArray() : [];
         var view = (Catalog: catalog, Names: pickedPokemon.Select(InGameRenderer.DisplayName).ToArray(),
-            Target: MoveTarget, Moves: selectedMoves.ToArray(), Submitted: submitted, Battle: battle,
+            PokemonList: (pokemonChoices, generationFilter, typeFilter?.Name, megaOnlyFilter),
+            Target: target, Moves: selectedMoves.ToArray(), Submitted: submitted, Battle: battle,
             Notice: Notification, Log: battleLog.ToArray(), Prompt: GetPrompt(),
             Switches: menu is BattleMenu.Switch or BattleMenu.ForcedSwitch or BattleMenu.MoveSwitch ? GetSwitchCandidates() : null,
             Back: menu is BattleMenu.Fight or BattleMenu.Switch,
             Result: result, Seconds: shownSeconds);
         ConsoleRenderThreads.Information(() => InGameRenderer.Draw(
-            view.Catalog, view.Names, view.Target, view.Moves, view.Submitted, view.Battle, view.Notice,
+            view.Catalog, view.PokemonList, view.Names, view.Target, view.Moves, view.Submitted, view.Battle, view.Notice,
             view.Log, view.Prompt, view.Switches, view.Back, view.Result, view.Seconds));
         if (view.Battle != null && view.Result == null)
             QueueBattleFrame(view.Battle, Environment.TickCount64);
@@ -103,7 +111,8 @@ sealed class InGameState : ClientState
     }
 
     private string GetPrompt() => animations.IsSwitching ? "포켓몬을 교체하는 중입니다..."
-        : animations.IsSummoning ? "포켓몬을 소환하는 중입니다..." : menu switch
+        : animations.IsSummoning ? "포켓몬을 소환하는 중입니다..."
+        : animations.IsMegaEvolving ? "포켓몬이 메가진화하는 중입니다..." : menu switch
     {
         BattleMenu.Main => "행동을 선택하세요. 1. 싸운다 2. 교체 3. 항복: ",
         BattleMenu.Fight => "공격할 기술의 번호를 선택하세요(0 : 취소): ",
@@ -127,7 +136,8 @@ sealed class InGameState : ClientState
              message is "CHOOSE_ACTION" or "CHOOSE_SWITCH" or "CHOOSE_SWITCH_MIDTURN" or "WAIT_SWITCH" or "LOCKED"))
         {
             bool startsAnimation = message.StartsWith("BATTLE_EFFECT ") || message.StartsWith("BATTLE_STATUS ") ||
-                message.StartsWith("BATTLE_STAT ") || message.StartsWith("BATTLE_BUFF ") || message.StartsWith("BATTLE_HEAL ");
+                message.StartsWith("BATTLE_STAT ") || message.StartsWith("BATTLE_BUFF ") || message.StartsWith("BATTLE_HEAL ") ||
+                message.StartsWith("BATTLE_MEGA ");
             animations.ExecuteOrQueue(() => ApplyServerMessage(message, receivedAt), startsAnimation);
             return this;
         }
@@ -169,6 +179,17 @@ sealed class InGameState : ClientState
                 }
             }
             ApplyBattleSnapshot(nextBattle);
+            return this;
+        }
+        if (message.StartsWith("BATTLE_MEGA ") && battle != null)
+        {
+            string[] parts = message.Split(' ', 3);
+            if (parts.Length == 3 && parts[1] is "SELF" or "OPPONENT")
+            {
+                var evolvedBattle = JsonSerializer.Deserialize<BattleView>(parts[2])
+                    ?? throw new InvalidDataException("메가진화 결과를 해석할 수 없습니다.");
+                animations.PlayMegaEvolution(parts[1] == "SELF", () => ApplyBattleSnapshot(evolvedBattle));
+            }
             return this;
         }
         if (message.StartsWith("BATTLE_EFFECT "))
@@ -217,6 +238,7 @@ sealed class InGameState : ClientState
         }
         if (message is "CHOOSE_ACTION" or "CHOOSE_SWITCH" or "CHOOSE_SWITCH_MIDTURN" or "WAIT_SWITCH" or "LOCKED")
         {
+            megaEvolutionSelected = false;
             menu = message switch
             {
                 "CHOOSE_ACTION" => BattleMenu.Main,
@@ -360,28 +382,20 @@ sealed class InGameState : ClientState
             Notification = "서버에서 포켓몬 목록을 받는 중입니다.";
         else if (submitted)
             Notification = "상대방의 선택을 기다리는 중입니다.";
+        else if (MoveTarget is not PokemonCatalogEntry target)
+            HandlePokemonSelection(input, catalog.Pokemon);
         else if (!int.TryParse(input, out int id))
             Notification = "목록에 표시된 번호를 입력하세요.";
-        else if (MoveTarget is not PokemonCatalogEntry target)
-        {
-            PokemonCatalogEntry? pokemon = catalog.Pokemon.FirstOrDefault(p => p.PokemonId == id);
-            if (pokemon == null)
-                Notification = "목록에 있는 포켓몬 번호를 입력하세요.";
-            else if (pickedPokemon.Any(p => p.SpeciesId == pokemon.SpeciesId))
-                Notification = "이미 팀에 있는 포켓몬입니다. 같은 포켓몬은 폼이 달라도 한 마리만 넣을 수 있습니다.";
-            else if (pokemon.LearnableMoveIds.Length < 4)
-                Notification = "서로 다른 기술 4개를 배울 수 있는 포켓몬을 선택하세요.";
-            else
-                pickedPokemon.Add(pokemon);
-        }
         else if (id == 0)
         {
             int[] moveIds = target.LearnableMoveIds.Distinct().ToArray();
-            Random.Shared.Shuffle(moveIds);
+            bool chooseAll = moveIds.Length < PokemonSelection.MaxMoves;
+            if (!chooseAll)
+                Random.Shared.Shuffle(moveIds);
             selectedMoves.Clear();
-            selectedMoves.AddRange(moveIds.Take(4));
+            selectedMoves.AddRange(moveIds.Take(PokemonSelection.RequiredMoveCount(moveIds.Length)));
             var movesById = catalog.Moves.ToDictionary(move => move.MoveId);
-            Notification = $"{InGameRenderer.DisplayName(target)}의 무작위 기술: " +
+            Notification = $"{InGameRenderer.DisplayName(target)}의 {(chooseAll ? "선택한 기술" : "무작위 기술")}: " +
                 string.Join(" / ", selectedMoves.Select(moveId => movesById[moveId].Name));
             await CompleteMoveSelectionAsync(target, writer);
         }
@@ -392,10 +406,117 @@ sealed class InGameState : ClientState
         else
         {
             selectedMoves.Add(id);
-            if (selectedMoves.Count == 4)
+            if (selectedMoves.Count == PokemonSelection.RequiredMoveCount(target.LearnableMoveIds.Length))
                 await CompleteMoveSelectionAsync(target, writer);
         }
         return true;
+    }
+
+    private bool MatchesPokemonFilters(PokemonCatalogEntry pokemon) =>
+        (generationFilter == null || pokemon.Generation == generationFilter) &&
+        (typeFilter == null || pokemon.Types.Any(type => type.TypeId == typeFilter.TypeId)) &&
+        (!megaOnlyFilter || pokemon.CanMegaEvolve);
+
+    private static bool IsPokemonFilter(string? word) => word is "세대" or "타입" or "메가진화";
+
+    private void HandlePokemonSelection(string input, PokemonCatalogEntry[] pokemon)
+    {
+        input = input.Trim();
+        string[] parts = input.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        if (IsPokemonFilter(parts.FirstOrDefault()))
+        {
+            ApplyPokemonFilters(parts, pokemon);
+            return;
+        }
+
+        var visible = pokemon.Where(MatchesPokemonFilters);
+        PokemonCatalogEntry? choice;
+        if (int.TryParse(input, out int id))
+            choice = visible.FirstOrDefault(p => p.PokemonId == id);
+        else
+        {
+            var matches = visible.Where(p => string.Equals(InGameRenderer.DisplayName(p), input, StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (matches.Length == 0)
+                matches = visible.Where(p => string.Equals(p.Name, input, StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (matches.Length > 1)
+            {
+                Notification = "같은 이름의 포켓몬이 여러 마리 있습니다. 목록의 번호나 폼을 포함한 이름을 입력하세요.";
+                return;
+            }
+            choice = matches.FirstOrDefault();
+        }
+
+        if (choice == null)
+            Notification = "목록에 있는 포켓몬 번호나 이름을 입력하세요.";
+        else if (pickedPokemon.Any(p => p.SpeciesId == choice.SpeciesId))
+            Notification = "이미 팀에 있는 포켓몬입니다. 같은 포켓몬은 폼이 달라도 한 마리만 넣을 수 있습니다.";
+        else if (choice.LearnableMoveIds.Length == 0)
+            Notification = "배울 수 있는 기술이 있는 포켓몬을 선택하세요.";
+        else
+            pickedPokemon.Add(choice);
+    }
+
+    private void ApplyPokemonFilters(string[] parts, PokemonCatalogEntry[] pokemon)
+    {
+        // 입력한 조건을 모두 확인한 뒤 함께 적용한다.
+        int? nextGenerationFilter = generationFilter;
+        TypeView? nextTypeFilter = typeFilter;
+        bool nextMegaOnlyFilter = megaOnlyFilter;
+        var seen = new HashSet<string>();
+        for (int i = 0; i < parts.Length;)
+        {
+            string filter = parts[i++];
+            if (!IsPokemonFilter(filter) || !seen.Add(filter))
+            {
+                Notification = "필터는 한 번씩 입력하세요. 예: 세대 3 타입 물 메가진화";
+                return;
+            }
+
+            string value = i < parts.Length && !IsPokemonFilter(parts[i]) ? parts[i++] : "";
+            bool clear = value is "0" or "전체";
+            if (filter == "세대")
+            {
+                if (clear)
+                    nextGenerationFilter = null;
+                else
+                {
+                    int[] generations = pokemon.Select(p => p.Generation).Where(g => g > 0).Distinct().Order().ToArray();
+                    if (!int.TryParse(value, out int generation) || !generations.Contains(generation))
+                    {
+                        Notification = generations.Length > 0
+                            ? $"세대 번호를 입력하세요 ({string.Join(", ", generations)}). 해제하려면 세대 0을 입력하세요."
+                            : "서버에서 세대 정보를 받지 못했습니다.";
+                        return;
+                    }
+                    nextGenerationFilter = generation;
+                }
+            }
+            else if (filter == "타입")
+            {
+                if (clear)
+                    nextTypeFilter = null;
+                else
+                {
+                    var types = pokemon.SelectMany(p => p.Types).DistinctBy(type => type.TypeId).OrderBy(type => type.TypeId).ToArray();
+                    nextTypeFilter = Array.Find(types, type => type.Name == value);
+                    if (nextTypeFilter == null)
+                    {
+                        Notification = "타입 이름을 입력하세요. " + string.Join(", ", types.Select(type => type.Name));
+                        return;
+                    }
+                }
+            }
+            else if (clear || value is "" or "1")
+                nextMegaOnlyFilter = !clear;
+            else
+            {
+                Notification = "메가진화만 보려면 메가진화, 해제하려면 메가진화 0을 입력하세요.";
+                return;
+            }
+        }
+        generationFilter = nextGenerationFilter;
+        typeFilter = nextTypeFilter;
+        megaOnlyFilter = nextMegaOnlyFilter;
     }
 
     private async Task CompleteMoveSelectionAsync(PokemonCatalogEntry pokemon, StreamWriter writer)
@@ -443,12 +564,21 @@ sealed class InGameState : ClientState
             case BattleMenu.Fight:
                 int moveCount = battle!.Team[battle.Active].Moves.Length;
                 if (input == "0")
+                {
+                    megaEvolutionSelected = false;
                     menu = BattleMenu.Main;
+                }
+                else if (number == 5 && battle.CanMegaEvolve)
+                {
+                    megaEvolutionSelected = true;
+                    Notification = "메가진화를 예약했습니다. 이어서 사용할 기술을 고르세요.";
+                }
                 else if (number < 1 || number > moveCount)
                     Notification = $"기술 번호 1~{moveCount}를 입력하세요.";
                 else
                 {
-                    await writer.WriteLineAsync($"USE_MOVE {number}");
+                    string mega = megaEvolutionSelected && battle.CanMegaEvolve ? " MEGA" : "";
+                    await writer.WriteLineAsync($"USE_MOVE {number}{mega}");
                     WaitForOpponent();
                 }
                 break;

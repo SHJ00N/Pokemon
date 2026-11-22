@@ -8,8 +8,7 @@ partial class RoomManager
     // 빗나가거나 막히면(방어·타입 상성) 최대 HP의 1/2 반동: 점프킥, 무릎차기
     private static readonly HashSet<int> CrashMoveIds = [26, 136];
     private const int SuckerPunchMoveId = 389, FocusPunchMoveId = 264, LastResortMoveId = 387;
-    // 마지막수단: 남은 PP가 적을수록 위력이 오르지만, PP가 없는 게임이라 PP가 충분할 때의 위력 40으로 쓴다.
-    private const int TrumpCardMoveId = 376, TrumpCardPower = 40;
+    private const int TrumpCardMoveId = 376;    // 마지막수단
     private const int FutureSightMoveId = 248, DoomDesireMoveId = 353;
     private const int SkullBashMoveId = 130, SkyDropMoveId = 507, ShadowForceMoveId = 467, PhantomForceMoveId = 566;
     private const int FeintMoveId = 364, HyperspaceHoleMoveId = 593, HyperspaceFuryMoveId = 621, BrickBreakMoveId = 280,
@@ -99,7 +98,7 @@ partial class RoomManager
     private static void EndCharging(BattleSide attacker, BattleSide defender)
     {
         BattlePokemon user = attacker.Current;
-        if (user.ChargingSlot is int slot && user.Moves[slot - 1].Id == SkyDropMoveId && defender.Current.SkyDropped)
+        if (user.ChargingMove?.Id == SkyDropMoveId && defender.Current.SkyDropped)
         {
             defender.Current.SkyDropped = false;
             defender.Current.Hidden = null;
@@ -115,7 +114,7 @@ partial class RoomManager
         foreach (BattleSide side in new[] { room.HostSide!, room.GuestSide! })
         {
             BattlePokemon holder = GetOther(room, side).Current;
-            bool held = holder.Hp > 0 && holder.ChargingSlot is int slot && holder.Moves[slot - 1].Id == SkyDropMoveId;
+            bool held = holder.Hp > 0 && holder.ChargingMove?.Id == SkyDropMoveId;
             if (side.Current.SkyDropped && !held)
             {
                 side.Current.SkyDropped = false;
@@ -216,12 +215,12 @@ partial class RoomManager
     {
         BattlePokemon pokemon = side.Current;
         return side.ChosenMove is int slot && !pokemon.MovedThisTurn && pokemon.RechargeSlot == null &&
-               !pokemon.SkyDropped && pokemon.Moves[slot - 1].Category != "변화";
+               !pokemon.SkyDropped && (side.Struggling || pokemon.Moves[slot - 1].Move.Category != "변화");
     }
 
     // 비장의무기: 자신의 다른 기술을 나온 뒤 모두 한 번 이상 써야 성공한다. 비장의무기만 알고 있으면 실패한다.
     private static bool CanUseLastResort(BattlePokemon user) =>
-        user.Moves.Length > 1 && user.Moves.All(move => move.Id == LastResortMoveId || user.UsedMoveIds.Contains(move.Id));
+        user.Moves.Length > 1 && user.Moves.All(slot => slot.Move.Id == LastResortMoveId || user.UsedMoveIds.Contains(slot.Move.Id));
 
     // 미래예지·파멸의소원: 2턴 뒤 턴이 끝날 때 그 자리의 포켓몬이 맞는다. 이미 예약돼 있으면 실패한다.
     // 방어로 막을 수 없다.
