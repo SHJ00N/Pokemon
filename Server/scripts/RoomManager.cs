@@ -703,7 +703,7 @@ partial class RoomManager
                 : megaEvolved == side ? "BATTLE_MEGA SELF " : "BATTLE_MEGA OPPONENT ";
             side.Player.QueueMessage(prefix + JsonSerializer.Serialize(
                 new BattleView(team.ToArray(), side.Active, GetPokemon(GetOther(room, side).Current),
-                    GetFieldEffects(room), GetMegaForm(side) != null)));
+                    GetFieldEffects(room), GetMegaForm(side) != null, room.Weather, room.Terrain)));
         }
     }
 

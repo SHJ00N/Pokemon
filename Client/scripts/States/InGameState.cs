@@ -199,7 +199,7 @@ sealed class InGameState : ClientState
             {
                 double effectiveness = effect.Length == 6 && double.TryParse(effect[5],
                     NumberStyles.Float, CultureInfo.InvariantCulture, out double multiplier) ? multiplier : 1;
-                animations.PlayAttack(new TypeView(typeId, effect[3], effect[2]), effect[4] == "SELF", effectiveness);
+                animations.PlayAttack(typeId, effect[4] == "SELF", effectiveness);
             }
             return this;
         }
@@ -322,7 +322,7 @@ sealed class InGameState : ClientState
     {
         if (battle == null || result != null) return;
         long now = Environment.TickCount64;
-        if (!animations.IsFrameDue(now)) return;
+        if (!animations.IsFrameDue(now, backgroundAnimationActive: battle.Weather != null || battle.Terrain != null)) return;
         if (animations.Update(now)) ShowMenu();
         if (result == null) QueueBattleFrame(battle, now);
     }
@@ -332,7 +332,7 @@ sealed class InGameState : ClientState
         BattleAnimationFrame frame = animations.CaptureFrame(now,
             playerAlive: view.Team[view.Active].Pokemon.CurrentHp > 0,
             opponentAlive: view.Opponent.CurrentHp > 0);
-        ConsoleRenderThreads.Sprites(() => InGameRenderer.DrawBattleFrame(view, frame));
+        ConsoleRenderThreads.Sprites(() => InGameRenderer.DrawBattleFrame(view, frame, now));
     }
 
     private void ApplyHealthEffects(BattleView next)

@@ -1,5 +1,3 @@
-using Pokemon.Protocol;
-
 namespace Client;
 
 // 게임 상태·서버 메시지·콘솔 좌표를 모르는 연출 관리자. 상태마다 별도 인스턴스를 사용한다.
@@ -89,8 +87,11 @@ sealed class BattleAnimationManager
         }, startsAnimation: true);
     }
 
-    public void PlayAttack(TypeView type, bool fromPlayer, double effectiveness = 1) =>
-        ExecuteOrQueue(() => animation.Enqueue(type, fromPlayer, effectiveness), startsAnimation: true);
+    public void PlayAttack(int typeId, bool fromPlayer, double effectiveness = 1) => ExecuteOrQueue(() =>
+    {
+        animation.Enqueue(typeId, fromPlayer, effectiveness);
+        nextFrameAt = 0;
+    }, startsAnimation: true);
 
     public void PlayStatus(string code, bool onPlayer) =>
         ExecuteOrQueue(() => statusAnimation.Enqueue(code, onPlayer), startsAnimation: true);
@@ -102,6 +103,7 @@ sealed class BattleAnimationManager
     {
         healingAnimation.Start(onPlayer);
         sound.PlaySoundSequence(SoundManager.HeldItemActivate, SoundManager.HealHp);
+        nextFrameAt = 0;
     }, startsAnimation: true);
 
     public void PlayMegaEvolution(bool onPlayer, Action revealForm) => ExecuteOrQueue(() =>
@@ -123,11 +125,11 @@ sealed class BattleAnimationManager
 
     public void ResetFaint(bool onPlayer) => (onPlayer ? playerFaint : opponentFaint).Reset();
 
-    public bool IsFrameDue(long now)
+    public bool IsFrameDue(long now, bool backgroundAnimationActive = false)
     {
         if (now < nextFrameAt) return false;
         nextFrameAt = now + (switchResumeAt != null || replaceAfterWithdraw != null || summonAnimation.IsBusy || playerFaint.IsBusy || opponentFaint.IsBusy ||
-            healingAnimation.IsBusy || megaEvolution.IsBusy ? 16 : 80);
+            healingAnimation.IsBusy || megaEvolution.IsBusy || animation.IsBusy ? 16 : backgroundAnimationActive ? 48 : 80);
         return true;
     }
 
@@ -198,7 +200,7 @@ sealed class BattleAnimationManager
     {
         if (healingAnimation.IsBusy)
             healingAnimation.Update(now, sound.GetSoundState(SoundManager.HealHp));
-        if (statusAnimation.Update(now) is string soundId)
+        if (statusAnimation.Update(now, sound) is string soundId)
         {
             if (lastOverlaySound != null && lastOverlaySound != soundId)
                 sound.StopSound(lastOverlaySound);
@@ -216,9 +218,9 @@ sealed class BattleAnimationManager
         int idle = IsBusy || idleStartedAt == null ? 0
             : (now - idleStartedAt.Value) % IdleCycleMilliseconds < IdleCycleMilliseconds / 2 ? 0 : -1;
         return new BattleAnimationFrame(playerAlive ? idle : 0, opponentAlive ? idle : 0,
-            animation.FlashPlayer, animation.FlashOpponent, animation.EffectType, animation.FromPlayer,
-            animation.Progress, playerFaint.Progress, opponentFaint.Progress, statusAnimation.Overlay,
-            healingAnimation.ShowImage ? healingAnimation.OnPlayer : null, summonAnimation.CurrentFrame,
+            animation.FlashPlayer, animation.FlashOpponent, animation.CurrentFrame,
+            playerFaint.Progress, opponentFaint.Progress, statusAnimation.Overlay,
+            healingAnimation.CaptureFrame(now), summonAnimation.CurrentFrame,
             replaceAfterWithdraw != null ? withdrawAnimation.CurrentFrame : null, megaEvolution.CurrentFrame);
     }
 }

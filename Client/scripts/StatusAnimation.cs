@@ -1,6 +1,6 @@
 namespace Client;
 
-// 상태이상·랭크 변화·버프 이미지를 덧그린 뒤 원래 그림을 복원할 때까지 다음 결과를 보류한다.
+// 상태이상·랭크 변화·버프는 그림 복원과 효과음 종료까지 다음 결과를 보류한다.
 sealed class StatusAnimation
 {
     public const int DisplayMilliseconds = 480;
@@ -38,7 +38,7 @@ sealed class StatusAnimation
         queue.Enqueue(new Effect(typeId, raised ? SoundManager.StatUp : SoundManager.StatFall, onPlayer));
 
     // 연출이 시작될 때 한 번만 효과음 ID를 반환한다.
-    public string? Update(long now)
+    public string? Update(long now, ISoundManager sound)
     {
         string? soundId = null;
         if (current == null && queue.TryDequeue(out var effect))
@@ -48,7 +48,8 @@ sealed class StatusAnimation
             soundId = effect.SoundId;
         }
         elapsed = Math.Max(0, now - startedAt);
-        if (current != null && elapsed >= DurationMilliseconds)
+        if (current is { } active && elapsed >= DurationMilliseconds &&
+            (active.SoundId is not string id || sound.GetSoundState(id) == SoundPlaybackState.Stopped))
             current = null;
         return soundId;
     }

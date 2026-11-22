@@ -26,7 +26,7 @@ public sealed record PokemonSelection(int PokemonId, int[] MoveIds)
 public sealed record RoomSummary(int RoomId, string HostName, int PlayerCount, bool InGame);
 
 // 전투 화면 정보. 받는 플레이어 기준으로 내 팀 전체와 상대의 현재 출전 포켓몬만 담는다.
-// FieldEffects: 날씨·필드·공간 효과와 남은 턴. 예: ["날씨: 비 (4턴)", "필드: 그래스필드 (3턴)", "트릭룸 (2턴)"]
 public sealed record TeamMemberView(PokemonView Pokemon, MoveView[] Moves);
+// FieldEffects는 화면 표시용 문구이며, Weather와 Terrain은 현재 적용된 날씨·필드 코드다.
 public sealed record BattleView(TeamMemberView[] Team, int Active, PokemonView Opponent, string[] FieldEffects,
-    bool CanMegaEvolve = false);
+    bool CanMegaEvolve = false, string? Weather = null, string? Terrain = null);

@@ -1,4 +1,3 @@
-using System.Globalization;
 using Pokemon.Protocol;
 
 namespace Client;
@@ -187,11 +186,11 @@ static class InGameRenderer
         Math.Max(1, Console.BufferWidth / 2 - 4), flip: false).Length;
 
     // Animation frames update only the sprite area, leaving menus and logs steady.
-    public static void DrawBattleFrame(BattleView battle, BattleAnimationFrame frame)
+    public static void DrawBattleFrame(BattleView battle, BattleAnimationFrame frame, long now)
     {
         var (playerJumpOffset, opponentJumpOffset, flashPlayer, flashOpponent,
-            effectType, effectFromPlayer, effectProgress, playerFaintProgress, opponentFaintProgress,
-            statusEffect, healingOnPlayer, summon, withdraw, megaEvolution) = frame;
+            attack, playerFaintProgress, opponentFaintProgress,
+            statusEffect, healing, summon, withdraw, megaEvolution) = frame;
         int width = Console.BufferWidth;
         int height = Console.BufferHeight;
         int columns = Math.Max(1, width / 2 - 4);
@@ -205,6 +204,8 @@ static class InGameRenderer
         int opponentY = positions.OpponentY + opponentJumpOffset;
 
         spriteBuffer.BeginFrame();
+        BattleWeatherRenderer.Draw(battle.Weather, now, width - 1, 2, positions.Bottom, spriteBuffer);
+        BattleTerrainRenderer.Draw(battle.Terrain, now, width - 1, 2, positions.Bottom, spriteBuffer);
         if (withdraw is { } exit)
             DrawWithdrawFrame(spriteBuffer, player, opponent, rightX, width, exit, playerFaintProgress, opponentFaintProgress);
         else if (summon is { } entry)
@@ -226,47 +227,14 @@ static class InGameRenderer
                 centerX, centerY, flip: !mega.OnPlayer, width, 2, positions.Bottom))
                 spriteBuffer.SetPixel(cell.X, cell.Y, cell.Ansi, cell.Character);
         }
-        if (effectType != null && effectProgress is >= 0 and <= 1)
+        if (attack is { } attackFrame)
         {
-            string effectColor = effectType.ColorRgb;
-            int effectBottom = positions.Bottom;
-            var (_, playerMax) = PokemonRenderer.GetHorizontalBounds(player);
-            var (opponentMin, _) = PokemonRenderer.GetHorizontalBounds(opponent);
-            int playerFront = 2 + playerMax;
-            int opponentFront = rightX + opponentMin;
-            int leftStart = playerFront - 3, leftEnd = opponentFront - 3;
-            if (leftEnd < leftStart)
-                (leftStart, leftEnd) = (playerFront, opponentFront);
-            int start = effectFromPlayer ? leftStart : leftEnd;
-            int end = effectFromPlayer ? leftEnd : leftStart;
-            double travelProgress = Math.Clamp(effectProgress / 0.78, 0, 1);
-            int x = start + (int)Math.Round((end - start) * travelProgress);
-            int sourceY = effectFromPlayer ? playerY + player.Length / 2 : opponentY + opponent.Length / 2;
-            int targetY = effectFromPlayer ? opponentY + opponent.Length / 2 : playerY + player.Length / 2;
-            int y = Math.Max(2, (int)Math.Round(sourceY + (targetY - sourceY) * travelProgress));
-            y += TypeMotionOffset(effectType.Name, effectProgress);
-            if (x >= 0 && x < width - 1 && y < height)
-            {
-                if (effectProgress < 0.78)
-                {
-                    int direction = effectFromPlayer ? 1 : -1;
-                    DrawTypeTrail(x, y, effectType.Name, direction, effectColor, width, effectBottom, spriteBuffer);
-                    AttackImageRenderer.Draw(effectType.TypeId, x, y, !effectFromPlayer,
-                        width, 2, effectBottom, spriteBuffer);
-                }
-                else
-                {
-                    AttackImageRenderer.Draw(effectType.TypeId, end, y, !effectFromPlayer,
-                        width, 2, effectBottom, spriteBuffer);
-                    int incoming = effectFromPlayer ? -1 : 1;
-                    foreach (var (offsetX, offsetY) in new[]
-                    {
-                        (-5, 0), (-4, -4), (-4, 4), (-2, -5), (-2, 5), (0, -5), (0, 5)
-                    })
-                        DrawEffectAt(end + offsetX * incoming, y + offsetY, "■", effectColor, width, effectBottom,
-                            spriteBuffer, bold: true);
-                }
-            }
+            var (playerMin, playerMax) = PokemonRenderer.GetHorizontalBounds(player);
+            var (opponentMin, opponentMax) = PokemonRenderer.GetHorizontalBounds(opponent);
+            AttackImageRenderer.DrawAttackFrame(attackFrame,
+                (2 + (playerMin + playerMax) / 2, playerY + player.Length / 2),
+                (rightX + (opponentMin + opponentMax) / 2, opponentY + opponent.Length / 2),
+                width, 2, positions.Bottom, spriteBuffer);
         }
         if (statusEffect is { } status)
         {
@@ -275,12 +243,12 @@ static class InGameRenderer
             int targetY = status.OnPlayer ? playerY : opponentY;
             DrawStatusOverlay(spriteBuffer, status, target, targetX, targetY, width);
         }
-        if (healingOnPlayer is bool onPlayer)
+        if (healing is { } healFrame)
         {
-            string[] target = onPlayer ? player : opponent;
-            int targetX = onPlayer ? 2 : rightX;
-            int targetY = onPlayer ? playerY : opponentY;
-            DrawHealingOverlay(spriteBuffer, target, targetX, targetY, width);
+            string[] target = healFrame.OnPlayer ? player : opponent;
+            int targetX = healFrame.OnPlayer ? 2 : rightX;
+            int targetY = healFrame.OnPlayer ? playerY : opponentY;
+            DrawHealingOverlay(spriteBuffer, healFrame.ImageIndex, target, targetX, targetY, width);
         }
         spriteBuffer.Flush(width, height);
     }
@@ -360,66 +328,11 @@ static class InGameRenderer
             y + target.Length / 2, flip: !effect.OnPlayer, width, y, y + target.Length, buffer);
     }
 
-    internal static void DrawHealingOverlay(BattleSpriteBuffer buffer, string[] target, int x, int y, int width)
+    internal static void DrawHealingOverlay(BattleSpriteBuffer buffer, int imageIndex, string[] target, int x, int y, int width)
     {
         var (minX, maxX) = PokemonRenderer.GetHorizontalBounds(target);
-        AttackImageRenderer.DrawHeal(x + (minX + maxX + 1) / 2,
+        AttackImageRenderer.DrawHeal(imageIndex, x + (minX + maxX + 1) / 2,
             y + target.Length / 2, width, y, y + target.Length, buffer);
-    }
-
-    private static void DrawTypeTrail(int x, int y, string type, int direction, string color, int width, int height,
-        BattleSpriteBuffer drawnCells)
-    {
-        (int X, int Y)[] particles = type switch
-        {
-            "불꽃" => [(-5, 0), (-4, -1), (-6, 1)],
-            "물" => [(-5, -1), (-5, 1), (-7, 0)],
-            "전기" => [(-4, -1), (-5, 1), (-7, -1)],
-            "풀" => [(-5, -1), (-5, 1), (-7, 0)],
-            "얼음" => [(-5, 0), (-7, -1), (-7, 1)],
-            "독" => [(-5, -1), (-6, 1), (-8, 0)],
-            "비행" => [(-5, -1), (-5, 1), (-8, 0)],
-            "고스트" or "에스퍼" => [(-6, -1), (-7, 1)],
-            "땅" or "바위" => [(-5, 1), (-7, 1)],
-            "드래곤" => [(-5, 0), (-7, -1), (-7, 1)],
-            "강철" => [(-5, 0), (-7, 0)],
-            _ => [(-5, 0), (-7, 0)]
-        };
-
-        foreach (var particle in particles)
-            DrawEffectAt(x + particle.X * direction, y + particle.Y, "■", color, width, height, drawnCells,
-                bold: particle.X == -5);
-    }
-
-    private static int TypeMotionOffset(string type, double progress)
-    {
-        int frame = (int)(progress * 12);
-        return type switch
-        {
-            "전기" => frame % 2 == 0 ? -1 : 1,
-            "불꽃" => frame % 3 == 0 ? -1 : 0,
-            "물" => (int)Math.Round(Math.Sin(progress * Math.PI * 4)),
-            "풀" or "비행" => (int)Math.Round(-Math.Sin(progress * Math.PI)),
-            "벌레" => frame % 3 == 0 ? 1 : frame % 3 == 1 ? -1 : 0,
-            "땅" or "바위" => progress > 0.5 ? 1 : 0,
-            "얼음" => frame % 4 == 0 ? -1 : 0,
-            "고스트" or "에스퍼" => (int)Math.Round(Math.Sin(progress * Math.PI * 2)),
-            _ => 0
-        };
-    }
-
-    private static void DrawEffectAt(int x, int y, string glyph, string color, int width, int height,
-        BattleSpriteBuffer drawnCells, bool bold = false)
-    {
-        if (x < 0 || x >= width - 1 || y < 2 || y >= height) return;
-        if (color.Length != 7 || color[0] != '#' ||
-            !uint.TryParse(color.AsSpan(1), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out uint rgb))
-            return;
-        int red = (int)(rgb >> 16), green = (int)((rgb >> 8) & 255), blue = (int)(rgb & 255);
-        red = Math.Min(255, red * 3 / 5 + 102);
-        green = Math.Min(255, green * 3 / 5 + 102);
-        blue = Math.Min(255, blue * 3 / 5 + 102);
-        drawnCells.SetPixel(x, y, $"\x1b[{(bold ? "1;" : "")}38;2;{red};{green};{blue}m", glyph[0]);
     }
 
     private static void DrawResult(string result, string? notification)
