@@ -271,8 +271,8 @@ partial class RoomManager
         if (room.Terrain != GrassyTerrain)
             return;
         foreach (BattleSide side in sides)
-            if (IsGrounded(room, side.Current))
-                Heal(room, side, side.Current.MaxHp / 16, "그래스필드");
+            if (IsGrounded(room, side.Current) && Heal(room, side, side.Current.MaxHp / 16, "그래스필드"))
+                SendBattleState(room);
     }
 
     // 턴 끝 마지막: 필드·중력·원더룸·흙놀이·물놀이·페어리록의 남은 턴을 줄이고, 플라스마샤워를 끝낸다.
