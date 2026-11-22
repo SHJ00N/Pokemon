@@ -5,21 +5,19 @@ sealed class BattleSide
     public BattlePokemon[] Team { get; }
     public int Active { get; set; }                 // 현재 출전 중인 팀 번호 (0부터)
     public BattlePokemon Current => Team[Active];
+    public bool HasMegaEvolved { get; set; }        // 이 전투에서 메가진화를 실제로 사용했는지
 
-    // 이번 턴에 고른 행동. 셋 중 하나만 값이 있다.
+    // 이번 턴에 고른 행동. 기술 또는 교체 중 하나만 값이 있다.
     public int? ChosenMove { get; set; }            // 기술 슬롯 (1~4)
+    public bool MegaEvolutionChosen { get; set; }   // 고른 기술을 쓰기 직전에 메가진화
     public int? ChosenSwitch { get; set; }          // 교체할 팀 번호 (0부터)
-    public bool SkipTurn { get; set; }              // 제한시간 안에 고르지 않아 이번 턴을 쉰다.
-    public bool HasChosen => ChosenMove != null || ChosenSwitch != null || SkipTurn;
+    public bool HasChosen => ChosenMove != null || ChosenSwitch != null;
     public bool Struggling { get; set; }            // 쓸 수 있는 기술이 없어 이번 턴에 발버둥을 쓴다.
     public BattlePokemon? TurnActor { get; set; }   // 이번 턴에 행동을 고른 포켓몬. 강제 교체로 나온 포켓몬은 행동하지 않는다.
 
     // 턴 도중 교체: 유턴·볼트체인지·막말내뱉기·배턴터치를 쓴 뒤 다음 포켓몬을 고르는 중 (CHOOSE_SWITCH_MIDTURN)
     public bool SwitchingMidTurn { get; set; }
     public bool BatonPassing { get; set; }          // 배턴터치로 교체 중: 랭크 등을 넘겨준다.
-
-    // 행동 선택 제한시간을 넘긴 횟수 (이 전투 전체). RoomManager.MaxTimeouts번이 되면 진다.
-    public int Timeouts { get; set; }
 
     // 출전 포켓몬이 쓰러져 다음 포켓몬을 골라야 하는 상태
     public bool MustSwitch { get; set; }
@@ -44,7 +42,7 @@ sealed class BattleSide
     public int ToxicSpikes { get; set; }            // 독압정 (최대 2층)
     public bool StealthRock { get; set; }           // 스텔스록
     public bool StickyWeb { get; set; }             // 끈적끈적네트
-    public string? HealingWish { get; set; }        // 치유소원·초승달춤: 다음에 나오는 포켓몬을 회복시킨다 (기술 이름)
+    public PokemonMoveInfo? HealingWish { get; set; } // 치유소원·초승달춤: 다음에 나오는 포켓몬을 회복시킨다.
     // 미래예지·파멸의소원: 0이 되는 턴 끝에 이 자리의 포켓몬이 FutureAttackUser의 FutureAttackMove를 맞는다.
     public int FutureAttackTurns { get; set; }
     public BattlePokemon? FutureAttackUser { get; set; }

@@ -28,7 +28,8 @@ partial class RoomManager
         var pokemon = selectable
             .Select(p => new PokemonCatalogEntry(p.Id, p.SpeciesId, p.Name,
                 formCount[p.SpeciesId] > 1 || !p.IsDefault ? p.FormName : null, GetTypes(p),
-                data.LearnableMovesByPokemonId[p.Id].Order().ToArray())).ToArray();
+                data.LearnableMovesByPokemonId[p.Id].Order().ToArray(), p.Generation,
+                data.MegaFormsByBaseId.ContainsKey(p.Id))).ToArray();
         // 기술은 고를 수 있는 폼이 배우는 것만 보낸다 (Z기술·다이맥스기 등은 빠진다).
         var learnable = pokemon.SelectMany(p => p.LearnableMoveIds).ToHashSet();
         var moves = data.MovesById.Values.Where(m => learnable.Contains(m.Id)).OrderBy(m => m.Id).Select(GetMove).ToArray();
@@ -187,7 +188,7 @@ partial class RoomManager
         }
     }
 
-    // 서로 다른 포켓몬 3마리와 각각의 기술 4개. 첫 번째 포켓몬이 먼저 출전한다.
+    // 서로 다른 포켓몬 3마리와 각각의 기술 최대 4개. 첫 번째 포켓몬이 먼저 출전한다.
     public void SelectTeam(ClientSession session, PokemonSelection[]? team)
     {
         lock (roomsLock)
@@ -209,7 +210,7 @@ partial class RoomManager
             if (team is not { Length: TeamSize } || team.Any(p => p == null || !IsValidSelection(p)) ||
                 team.Select(p => data.PokemonById[p.PokemonId].SpeciesId).Distinct().Count() != TeamSize)
             {
-                session.QueueMessage("ERROR 서로 다른 포켓몬 3마리와 각각 배울 수 있는 서로 다른 기술 4개를 선택하세요.");
+                session.QueueMessage("ERROR 서로 다른 포켓몬 3마리와 각각 배울 수 있는 서로 다른 기술 4개를 고르세요. 4개 미만이면 모든 기술을 선택하세요.");
                 return;
             }
 
@@ -228,34 +229,68 @@ partial class RoomManager
         }
     }
 
-    // slot: 출전 중인 포켓몬의 기술 4개 중 몇 번째인지 (1~4)
-    public void UseMove(ClientSession session, int slot)
+    // slot: 출전 중인 포켓몬이 현재 사용할 수 있는 기술 목록에서 몇 번째인지
+    public void UseMove(ClientSession session, int slot, bool megaEvolve = false)
     {
         lock (roomsLock)
         {
             if (!TryGetBattle(session, out GameRoom room, out BattleSide me, out BattleSide other) ||
-                room.BattleOver || me.MustSwitch || other.MustSwitch || me.HasChosen)
+                room.BattleOver || me.MustSwitch || other.MustSwitch || me.HasChosen ||
+                me.SwitchingMidTurn || other.SwitchingMidTurn)
             {
                 session.QueueMessage("ERROR 지금은 행동을 선택할 수 없습니다.");
                 return;
             }
 
-            // 사슬묶기·앙코르·트집·도발·회복봉인·봉인으로 쓸 수 없는 기술은 고를 수 없다.
+            if (megaEvolve && GetMegaForm(me) == null)
+            {
+                session.QueueMessage("ERROR 지금은 메가진화할 수 없습니다.");
+                return;
+            }
+
+            if (slot < 1 || slot > me.Current.Moves.Length)
+            {
+                session.QueueMessage("ERROR 현재 포켓몬의 기술 목록에 있는 슬롯을 선택하세요.");
+                return;
+            }
+
+            // PP가 부족하거나 효과로 막힌 기술은 고를 수 없다.
             // 쓸 수 있는 기술이 하나도 없으면 어느 기술을 골라도 발버둥을 쓴다.
             me.Struggling = false;
             if (MoveBlockedBy(me, other, slot) is string cause)
             {
                 if (!MustStruggle(me, other))
                 {
-                    session.QueueMessage($"ERROR {cause} 때문에 {WithJosa(me.Current.Moves[slot - 1].Name, "을", "를")} 쓸 수 없습니다.");
+                    session.QueueMessage($"ERROR {cause} 때문에 {WithJosa(me.Current.Moves[slot - 1].Move.Name, "을", "를")} 쓸 수 없습니다.");
                     return;
                 }
                 me.Struggling = true;
             }
 
             me.ChosenMove = slot;
+            me.MegaEvolutionChosen = megaEvolve;
             TryResolveTurn(room);
         }
+    }
+
+    private void ApplyChosenMegaEvolution(GameRoom room, BattleSide side)
+    {
+        if (!side.MegaEvolutionChosen || GetMegaForm(side) is not PokemonInfo form)
+            return;
+
+        side.MegaEvolutionChosen = false;
+        string name = side.Current.Info.Name;
+        side.Current.MegaEvolve(form);
+        side.HasMegaEvolved = true;
+        SendBattleState(room, megaEvolved: side);
+        LogPokemon(room, side, $"{WithJosa(name, "이", "가")} {WithJosa(form.Name, "으로", "로")} 메가진화했다!");
+    }
+
+    private PokemonInfo? GetMegaForm(BattleSide side)
+    {
+        BattlePokemon pokemon = side.Current;
+        return !side.HasMegaEvolved && pokemon.Hp > 0 && !pokemon.Transformed
+            ? data.MegaFormsByBaseId.GetValueOrDefault(pokemon.Info.Id) : null;
     }
 
     // teamSlot: 교체할 팀 번호 (1~3)
@@ -429,8 +464,8 @@ partial class RoomManager
         foreach (BattleSide side in new[] { host, guest })
         {
             BattleSide pursuer = GetOther(room, side);
-            if (side.ChosenSwitch == null || pursuer.ChosenMove is not int slot ||
-                pursuer.Current.Moves[slot - 1].Id != PursuitMoveId || pursuer.Current.RechargeSlot != null)
+            if (side.ChosenSwitch == null || pursuer.ChosenMove is not int slot || pursuer.Struggling ||
+                pursuer.Current.Moves[slot - 1].Move.Id != PursuitMoveId || pursuer.Current.RechargeSlot != null)
                 continue;
             side.Current.SwitchingOut = true;
             ExecuteMove(room, pursuer, side, movesLast: false);
@@ -457,7 +492,7 @@ partial class RoomManager
         // 우선도가 높은 기술 → 스피드가 빠른 포켓몬(트릭룸이면 느린 포켓몬) → 같으면 무작위
         List<BattleSide> attackers = new[] { host, guest }
             .Where(side => side.ChosenMove != null && !pursued.Contains(side))
-            .OrderByDescending(side => side.Current.Moves[side.ChosenMove!.Value - 1].Priority)
+            .OrderByDescending(side => side.Struggling ? 0 : side.Current.Moves[side.ChosenMove!.Value - 1].Move.Priority)
             .ThenByDescending(side => room.TrickRoomTurns > 0 ? -GetSpeed(side) : GetSpeed(side))
             .ThenBy(_ => Random.Shared.Next())
             .ToList();
@@ -468,8 +503,8 @@ partial class RoomManager
         foreach (BattleSide side in attackers)
         {
             BattlePokemon pokemon = side.Current;
-            if (pokemon.Moves[side.ChosenMove!.Value - 1].Id == FocusPunchMoveId && pokemon.RechargeSlot == null &&
-                !pokemon.SkyDropped)
+            if (!side.Struggling && pokemon.Moves[side.ChosenMove!.Value - 1].Move.Id == FocusPunchMoveId &&
+                pokemon.RechargeSlot == null && !pokemon.SkyDropped)
                 LogPokemon(room, side, $"{WithJosa(pokemon.Info.Name, "은", "는")} 기합을 모으기 시작했다!");
         }
 
@@ -504,8 +539,8 @@ partial class RoomManager
         EndOfTurn(room);
 
         host.ChosenMove = guest.ChosenMove = null;
+        host.MegaEvolutionChosen = guest.MegaEvolutionChosen = false;
         host.ChosenSwitch = guest.ChosenSwitch = null;
-        host.SkipTurn = guest.SkipTurn = false;
         host.Struggling = guest.Struggling = false;
         SendBattleState(room);
         if (!EndBattleIfOver(room))
@@ -659,14 +694,16 @@ partial class RoomManager
         GetOther(room, actor).Player.QueueMessage("BATTLE_LOG " + theirs);
     }
 
-    private void SendBattleState(GameRoom room)
+    private void SendBattleState(GameRoom room, BattleSide? megaEvolved = null)
     {
         foreach (BattleSide side in new[] { room.HostSide!, room.GuestSide! })
         {
             var team = side.Team.Select(p => new TeamMemberView(GetPokemon(p), p.Moves.Select(GetMove).ToArray()));
-            side.Player.QueueMessage("BATTLE_STATE " + JsonSerializer.Serialize(
+            string prefix = megaEvolved == null ? "BATTLE_STATE "
+                : megaEvolved == side ? "BATTLE_MEGA SELF " : "BATTLE_MEGA OPPONENT ";
+            side.Player.QueueMessage(prefix + JsonSerializer.Serialize(
                 new BattleView(team.ToArray(), side.Active, GetPokemon(GetOther(room, side).Current),
-                    GetFieldEffects(room))));
+                    GetFieldEffects(room), GetMegaForm(side) != null)));
         }
     }
 
@@ -708,7 +745,9 @@ partial class RoomManager
     private bool IsValidSelection(PokemonSelection selection) =>
         data.PokemonById.TryGetValue(selection.PokemonId, out PokemonInfo? info) && info.IsSelectable &&
         info.SpeciesId <= MaxSelectableSpeciesId &&
-        selection.MoveIds is { Length: 4 } ids && ids.Distinct().Count() == 4 &&
+        selection.MoveIds is { Length: > 0 } ids &&
+        ids.Length == PokemonSelection.RequiredMoveCount(data.LearnableMovesByPokemonId[selection.PokemonId].Count) &&
+        ids.Distinct().Count() == ids.Length &&
         ids.All(id => data.LearnableMovesByPokemonId[selection.PokemonId].Contains(id));
 
     private BattleSide CreateSide(ClientSession player, PokemonSelection[] team) => new(player, team
@@ -725,12 +764,16 @@ partial class RoomManager
         ? [GetType(pokemon.Type1Id), GetType(second)] : [GetType(pokemon.Type1Id)];
 
     private MoveView GetMove(PokemonMoveInfo move) =>
-        new(move.Id, move.Name, GetType(move.TypeId), move.Power, move.Accuracy);
+        new(move.Id, move.Name, GetType(move.TypeId), move.Power, move.Accuracy, MaxPp: move.Pp);
+
+    private MoveView GetMove(BattleMoveSlot slot) =>
+        GetMove(slot.Move) with { Pp = slot.Pp, MaxPp = slot.MaxPp };
 
     private PokemonView GetPokemon(BattlePokemon pokemon) =>
         new(pokemon.Info.Id, pokemon.Info.SpeciesId, pokemon.Info.Name, pokemon.Hp, pokemon.MaxHp,
             pokemon.Types.Select(GetType).ToArray(),    // 물붓기 등으로 바뀐 지금 타입
-            pokemon.Status == null ? null : StatusName(pokemon.Status), DescribeStages(pokemon));
+            pokemon.Status == null ? null : StatusName(pokemon.Status), DescribeStages(pokemon),
+            pokemon.TransformedInto is { } form ? new PokemonAppearance(form.Id, form.SpeciesId) : null);
 
     public void LeaveRoom(ClientSession session, bool notify = false)
     {

@@ -8,7 +8,7 @@ static class InGameRenderer
 
     private static readonly BattleSpriteBuffer spriteBuffer = new();
     private static (int Width, int Height, int StatusY)? battleLayout;
-    private const int BattleInformationRows = 24;
+    private const int BattleInformationRows = 26;
 
     // 목록에 표시하는 이름. 같은 종의 다른 폼과 구분해야 하면 폼 이름을 붙인다. 예: 라이츄 (알로라의 모습)
     public static string DisplayName(PokemonCatalogEntry entry) =>
@@ -35,7 +35,8 @@ static class InGameRenderer
 
     // switchList: 교체 메뉴일 때 고를 수 있는 팀 번호(0부터). null이면 기술 목록을 표시한다.
     // timerSeconds: 선택 제한시간의 남은 초. null이면 표시하지 않는다.
-    public static void Draw(PokemonCatalogResponse? catalog, IReadOnlyList<string> teamNames,
+    public static void Draw(PokemonCatalogResponse? catalog,
+        (PokemonCatalogEntry[] Entries, int? Generation, string? Type, bool MegaOnly) pokemonList, IReadOnlyList<string> teamNames,
         PokemonCatalogEntry? selectedPokemon, IReadOnlyList<int> selectedMoves, bool submitted,
         BattleView? battle, string? notification, IReadOnlyList<string> battleLog, string prompt,
         IReadOnlyList<int>? switchList, bool showBack, string? result, int? timerSeconds)
@@ -65,23 +66,32 @@ static class InGameRenderer
         }
         else if (selectedPokemon == null)
         {
-            DrawPokemonCatalog(catalog.Pokemon);
+            DrawPokemonCatalog(pokemonList.Entries);
             if (teamNames.Count > 0)
                 TextRenderer.WriteLine("선택한 팀: " + string.Join(" / ", teamNames));
-            TextRenderer.WriteLine($"{teamNames.Count + 1}번째 포켓몬을 선택해주세요. (목록의 번호 입력, 리전폼 등은 10001 이후 번호)");
+            string generation = pokemonList.Generation is int value ? $"{value}세대" : "전체";
+            string mega = pokemonList.MegaOnly ? "가능한 포켓몬만" : "전체";
+            TextRenderer.WriteLine($"필터  세대: {generation} / 타입: {pokemonList.Type ?? "전체"} / 메가진화: {mega}");
+            TextRenderer.WriteLine("메가진화 필터: 메가진화 / 세대·타입과 함께: 세대 3 타입 물 메가진화");
+            TextRenderer.WriteLine("필터 해제: 세대 0 / 타입 0 / 메가진화 0");
+            TextRenderer.WriteLine($"{teamNames.Count + 1}번째 포켓몬의 번호나 이름을 입력하세요.");
         }
         else
         {
             var movesById = catalog.Moves.ToDictionary(move => move.MoveId);
-            DrawMoveCatalog(selectedPokemon, selectedPokemon.LearnableMoveIds.Select(id => movesById[id]));
+            DrawMoveCatalog(selectedPokemon, selectedPokemon.LearnableMoveIds.Select(id => movesById[id]).ToArray());
             TextRenderer.WriteLine("선택한 팀: " + string.Join(" / ", teamNames));
             TextRenderer.WriteLine("선택한 기술: " + string.Join(" / ", selectedMoves.Select(id => movesById[id].Name)));
-            TextRenderer.WriteLine("0. 기술 4개 무작위 선택 후 확정 (현재 선택한 기술을 대체)");
+            int requiredMoves = PokemonSelection.RequiredMoveCount(selectedPokemon.LearnableMoveIds.Length);
+            bool chooseAll = requiredMoves < PokemonSelection.MaxMoves;
+            TextRenderer.WriteLine(chooseAll ? "0. 배울 수 있는 기술 모두 선택 후 확정"
+                : $"0. 기술 {requiredMoves}개 무작위 선택 후 확정 (현재 선택한 기술을 대체)");
             // 팀에 같은 종이 없으므로 이름으로 몇 번째인지 찾는다.
             int order = teamNames.ToList().IndexOf(DisplayName(selectedPokemon)) + 1;
             TextRenderer.Write($"{order}번째 포켓몬 ");
             TypeColorRenderer.WriteColored(DisplayName(selectedPokemon), SelectedPokemonColor);
-            TextRenderer.WriteLine($"의 {selectedMoves.Count + 1}번 기술 번호를 입력하세요 (서로 다른 기술 4개).");
+            string instruction = chooseAll ? $"배울 수 있는 기술 {requiredMoves}개 모두" : $"서로 다른 기술 {requiredMoves}개";
+            TextRenderer.WriteLine($"의 {selectedMoves.Count + 1}번 기술 번호를 입력하세요 ({instruction}).");
         }
         if (notification != null) TextRenderer.WriteLine("\n" + notification);
         // 마지막 줄이 입력 줄이다. 남은 시간 뒤에서 입력한다.
@@ -92,9 +102,11 @@ static class InGameRenderer
         }
     }
 
-    private static void DrawPokemonCatalog(IEnumerable<PokemonCatalogEntry> pokemon)
+    private static void DrawPokemonCatalog(IReadOnlyList<PokemonCatalogEntry> pokemon)
     {
         TextRenderer.WriteLine("포켓몬 목록");
+        if (pokemon.Count == 0)
+            TextRenderer.WriteLine("필터에 맞는 포켓몬이 없습니다.");
         foreach (PokemonCatalogEntry entry in pokemon)
         {
             TextRenderer.Write($"{entry.PokemonId,5}. {TextRenderer.FitToWidth(DisplayName(entry), 32)}");
@@ -111,18 +123,21 @@ static class InGameRenderer
     // 기술 선택 화면에서 지금 기술을 고르는 포켓몬 이름 색
     private const string SelectedPokemonColor = "#FFD43B";
 
-    private static void DrawMoveCatalog(PokemonCatalogEntry pokemon, IEnumerable<MoveView> moves)
+    private static void DrawMoveCatalog(PokemonCatalogEntry pokemon, IReadOnlyList<MoveView> moves)
     {
+        const string nameHeader = "기술 이름";
+        int nameWidth = moves.Select(move => TextRenderer.DisplayWidth(move.Name))
+            .Prepend(TextRenderer.DisplayWidth(nameHeader)).Max();
         TypeColorRenderer.WriteColored(DisplayName(pokemon), SelectedPokemonColor);
         // 조사는 마지막 한글(폼 이름이 있으면 폼 이름)에 맞춘다.
         TextRenderer.WriteLine($"{TextRenderer.Josa(pokemon.FormName ?? pokemon.Name, "이", "가")} 배울 수 있는 기술 목록");
-        TextRenderer.WriteLine("번호 타입    기술이름 위력 명중률");
+        TextRenderer.WriteLine($"번호 타입    {TextRenderer.FitToWidth(nameHeader, nameWidth)} 위력 명중률   PP");
         foreach (MoveView move in moves)
         {
             TextRenderer.Write($"{move.MoveId,3}. ");
             TypeColorRenderer.WriteMarker(move.Type.ColorRgb);
             TextRenderer.Write(TextRenderer.FitToWidth(move.Type.Name, 6));
-            TextRenderer.WriteLine($" {TextRenderer.FitToWidth(move.Name, 8)} {move.Power?.ToString() ?? "-",3} {move.Accuracy?.ToString() ?? "-",3}");
+            TextRenderer.WriteLine($" {TextRenderer.FitToWidth(move.Name, nameWidth)} {move.Power?.ToString() ?? "-",4} {move.Accuracy?.ToString() ?? "-",6} {move.MaxPp?.ToString() ?? "-",4}");
         }
     }
 
@@ -135,8 +150,8 @@ static class InGameRenderer
         int leftX = 2;
         int columns = Math.Max(1, width / 2 - 4);
         int maxRows = Math.Max(1, height - BattleInformationRows);
-        string[] player = PokemonRenderer.Load(active.Pokemon.PokemonId, active.Pokemon.SpeciesId, maxRows, columns, flip: true);
-        string[] opponent = PokemonRenderer.Load(battle.Opponent.PokemonId, battle.Opponent.SpeciesId, maxRows, columns, flip: false);
+        string[] player = PokemonRenderer.Load(active.Pokemon, maxRows, columns, flip: true);
+        string[] opponent = PokemonRenderer.Load(battle.Opponent, maxRows, columns, flip: false);
         int statusY = GetSpritePositions(player.Length, opponent.Length).Bottom + 2;
         var layout = (width, height, statusY);
         if (battleLayout != layout)
@@ -168,7 +183,7 @@ static class InGameRenderer
     }
 
     internal static int GetSpriteRows(PokemonView pokemon) => PokemonRenderer.Load(
-        pokemon.PokemonId, pokemon.SpeciesId, Math.Max(1, Console.BufferHeight - BattleInformationRows),
+        pokemon, Math.Max(1, Console.BufferHeight - BattleInformationRows),
         Math.Max(1, Console.BufferWidth / 2 - 4), flip: false).Length;
 
     // Animation frames update only the sprite area, leaving menus and logs steady.
@@ -176,13 +191,13 @@ static class InGameRenderer
     {
         var (playerJumpOffset, opponentJumpOffset, flashPlayer, flashOpponent,
             effectType, effectFromPlayer, effectProgress, playerFaintProgress, opponentFaintProgress,
-            statusEffect, healingOnPlayer, summon, withdraw) = frame;
+            statusEffect, healingOnPlayer, summon, withdraw, megaEvolution) = frame;
         int width = Console.BufferWidth;
         int height = Console.BufferHeight;
         int columns = Math.Max(1, width / 2 - 4);
         int maxRows = Math.Max(1, height - BattleInformationRows);
-        string[] player = PokemonRenderer.Load(battle.Team[battle.Active].Pokemon.PokemonId, battle.Team[battle.Active].Pokemon.SpeciesId, maxRows, columns, flip: true);
-        string[] opponent = PokemonRenderer.Load(battle.Opponent.PokemonId, battle.Opponent.SpeciesId, maxRows, columns, flip: false);
+        string[] player = PokemonRenderer.Load(battle.Team[battle.Active].Pokemon, maxRows, columns, flip: true);
+        string[] opponent = PokemonRenderer.Load(battle.Opponent, maxRows, columns, flip: false);
         int rightX = width - Math.Max(BattlePanelRenderer.Width,
             PokemonRenderer.GetHorizontalBounds(opponent).MaxX + 1) - 2;
         var positions = GetSpritePositions(player.Length, opponent.Length);
@@ -197,7 +212,19 @@ static class InGameRenderer
         else
         {
             DrawPokemonSprites(spriteBuffer, player, opponent, rightX, playerJumpOffset, opponentJumpOffset,
-                flashPlayer, flashOpponent, playerFaintProgress, opponentFaintProgress);
+                flashPlayer || megaEvolution is { OnPlayer: true, HidePokemon: true },
+                flashOpponent || megaEvolution is { OnPlayer: false, HidePokemon: true },
+                playerFaintProgress, opponentFaintProgress);
+        }
+        if (megaEvolution is { ImageIndex: > 0 } mega)
+        {
+            string[] target = mega.OnPlayer ? player : opponent;
+            var (minX, maxX) = PokemonRenderer.GetHorizontalBounds(target);
+            int centerX = (mega.OnPlayer ? 2 : rightX) + (minX + maxX + 1) / 2;
+            int centerY = (mega.OnPlayer ? playerY : opponentY) + target.Length / 2;
+            foreach (var cell in AttackImageRenderer.GetMegaEvolutionCells(mega.ImageIndex,
+                centerX, centerY, flip: !mega.OnPlayer, width, 2, positions.Bottom))
+                spriteBuffer.SetPixel(cell.X, cell.Y, cell.Ansi, cell.Character);
         }
         if (effectType != null && effectProgress is >= 0 and <= 1)
         {

@@ -32,6 +32,11 @@ static class AttackImageRenderer
         GetCells(Load("effect_scripts", "pokeball_image.txt"), centerX, centerY, flip,
             width, top, bottom, maxRows);
 
+    internal static IEnumerable<(int X, int Y, string Ansi, char Character)> GetMegaEvolutionCells(
+        int imageIndex, int centerX, int centerY, bool flip, int width, int top, int bottom) =>
+        GetCells(Load("effect_scripts", $"mega_evolution_{imageIndex:D2}.txt"), centerX, centerY, flip,
+            width, top, bottom, maxColumns: Math.Max(2, width / 2 - 4));
+
     internal static IEnumerable<(int X, int Y, string Ansi, char Character)> GetResultCells(
         string result, int width, int top, int bottom)
     {
@@ -42,13 +47,13 @@ static class AttackImageRenderer
 
     private static IEnumerable<(int X, int Y, string Ansi, char Character)> GetCells(
         (string Ansi, char Character)[][] image, int centerX, int centerY, bool flip, int width, int top, int bottom,
-        int maxRows = int.MaxValue)
+        int maxRows = int.MaxValue, int maxColumns = int.MaxValue)
     {
         if (image.Length == 0 || bottom <= top || width < 3) yield break;
         int sourcePixels = image.Max(row => row.Length) / 2;
         if (sourcePixels == 0) yield break;
         double scale = Math.Min(1, Math.Min((double)Math.Min(bottom - top, maxRows) / image.Length,
-            (double)(width - 1) / (sourcePixels * 2)));
+            (double)Math.Min(width - 1, maxColumns) / (sourcePixels * 2)));
         int rows = Math.Max(1, (int)(image.Length * scale));
         int pixels = Math.Max(1, (int)(sourcePixels * scale));
         int left = centerX - pixels;

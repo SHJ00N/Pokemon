@@ -90,7 +90,7 @@ partial class RoomManager
     }
 
     // HP를 회복하고 기록을 남긴다. 이미 가득 차 있으면 false.
-    private static bool Heal(GameRoom room, BattleSide side, int amount)
+    private static bool Heal(GameRoom room, BattleSide side, int amount, string? source = null)
     {
         BattlePokemon pokemon = side.Current;
         // 회복봉인 중에는 HP가 회복되지 않는다.
@@ -98,7 +98,8 @@ partial class RoomManager
             return false;
         int healed = Math.Min(Math.Max(1, amount), pokemon.MaxHp - pokemon.Hp);
         pokemon.Hp += healed;
-        LogPokemon(room, side, $"{WithJosa(pokemon.Info.Name, "은", "는")} 체력을 회복했다! (+{healed})");
+        string cause = source == null ? "" : WithJosa(source, "으로", "로") + " ";
+        LogPokemon(room, side, $"{WithJosa(pokemon.Info.Name, "은", "는")} {cause}체력을 회복했다! (+{healed})");
         SendHealEffect(room, side);
         return true;
     }
@@ -125,6 +126,6 @@ partial class RoomManager
                 Heal(room, side, side.Current.MaxHp / 16);
         foreach (BattleSide side in sides)
             if (side.Current.Ingrained)
-                Heal(room, side, side.Current.MaxHp / 16);
+                Heal(room, side, side.Current.MaxHp / 16, "뿌리박기");
     }
 }

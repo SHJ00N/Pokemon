@@ -39,14 +39,15 @@ internal sealed record PokemonInfo(
     int BaseSpAttack,
     int BaseSpDefense,
     int BaseSpeed,
-    int Weight);    // 몸무게 (0.1kg 단위)
+    int Weight,    // 몸무게 (0.1kg 단위)
+    int Generation);
 
 /* 
 db에서 추출한 기본 데이터
 테이블 목록 : 포켓몬(폼), 타입, 기술, 타입간 상관 관계, 포켓몬별 기술 목록, 상태이상, 기술별 상태이상 효과,
               기술 부가 효과(MoveMeta), 기술의 능력치 변화(MoveStatChange)
-포켓몬·기술·타입·상성은 현재 세대(페어리 포함 18타입) 데이터다. 종·진화·특성·도구·폼 체인지 테이블도 DB에 있지만
-아직 전투에서 쓰지 않아 읽지 않는다. (Server/resources/db/README.md)
+포켓몬·기술·타입·상성은 현재 세대(페어리 포함 18타입) 데이터다.
+PokemonFormChange에서 6세대 메가진화 관계를 읽는다. (Server/resources/db/README.md)
 
 */
 
@@ -54,6 +55,7 @@ internal sealed class GameData
 {
     // 실행중 변경되지 않는 데이터이므로 FrozenDictionary 사용
     public FrozenDictionary<int, PokemonInfo> PokemonById { get; } // 포켓몬 테이블
+    public FrozenDictionary<int, PokemonInfo> MegaFormsByBaseId { get; }
     public FrozenDictionary<int, PokemonTypeInfo> TypesById { get; } // 타입 테이블
     public FrozenDictionary<int, PokemonMoveInfo> MovesById { get; } // 기술 테이블
     public FrozenDictionary<int, StatusConditionInfo> StatusConditionsById { get; } // 상태이상 테이블
@@ -75,10 +77,12 @@ internal sealed class GameData
         FrozenDictionary<int, IReadOnlyList<MoveStatusEffectInfo>> moveStatusEffectsByMoveId,
         FrozenDictionary<int, MoveMetaInfo> moveMetaById,
         FrozenDictionary<int, IReadOnlyList<MoveStatChangeInfo>> moveStatChangesByMoveId,
-        FrozenDictionary<int, FrozenSet<string>> moveFlagsByMoveId)
+        FrozenDictionary<int, FrozenSet<string>> moveFlagsByMoveId,
+        FrozenDictionary<int, PokemonInfo> megaFormsByBaseId)
     {
         MoveFlagsByMoveId = moveFlagsByMoveId;
         PokemonById = pokemonById;
+        MegaFormsByBaseId = megaFormsByBaseId;
         TypesById = typesById;
         MovesById = movesById;
         EffectivenessByType = effectivenessByType;
@@ -132,24 +136,53 @@ internal sealed class GameData
         var moveMeta = LoadMoveMeta(connection, moves);
         var statChanges = LoadMoveStatChanges(connection, moves);
         var flags = LoadMoveFlags(connection, moves);
+        var megaForms = LoadMegaForms(connection, pokemon);
         return new GameData(pokemon, types, moves, effectiveness, learnsets, statuses, statusEffects,
-            moveMeta, statChanges, flags);
+            moveMeta, statChanges, flags, megaForms);
     }
 
     // 두 타입의 상성 관계에 따른 데미지 배율
     public double GetMultiplier(int attackTypeId, int defendTypeId) =>
         EffectivenessByType[(attackTypeId, defendTypeId)];
 
+    private static FrozenDictionary<int, PokemonInfo> LoadMegaForms(
+        SqliteConnection connection, FrozenDictionary<int, PokemonInfo> pokemon)
+    {
+        // 기존 이미지가 있는 6세대 메가 폼은 DB에서 메가독침붕(10090)까지다.
+        // 두 폼이 있는 리자몽과 뮤츠는 폼 번호가 작은 X를 기본으로 쓴다.
+        const int LastGen6MegaFormId = 10090;
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT base_pokemon_id, MIN(pokemon_id)
+            FROM PokemonFormChange
+            WHERE method = 'mega' AND pokemon_id <= $lastFormId
+            GROUP BY base_pokemon_id
+            """;
+        command.Parameters.AddWithValue("$lastFormId", LastGen6MegaFormId);
+        using var reader = command.ExecuteReader();
+        var forms = new Dictionary<int, PokemonInfo>();
+        while (reader.Read())
+        {
+            int baseId = reader.GetInt32(0);
+            PokemonInfo form = pokemon[reader.GetInt32(1)];
+            if (pokemon[baseId].SpeciesId != form.SpeciesId || pokemon[baseId].BaseHp != form.BaseHp)
+                throw new InvalidDataException($"메가진화 폼 {form.Id}의 종 또는 HP 종족값이 기본 폼과 다릅니다.");
+            forms.Add(baseId, form);
+        }
+        return forms.ToFrozenDictionary();
+    }
+
     private static FrozenDictionary<int, PokemonInfo> LoadPokemons(SqliteConnection connection)
     {
         using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT pokemon_id, species_id, name, form_name, is_default, is_selectable,
+            SELECT p.pokemon_id, p.species_id, p.name, form_name, is_default, is_selectable,
                    type1_id, type2_id,
                    base_hp, base_attack, base_defense,
-                   base_sp_attack, base_sp_defense, base_speed, weight
-            FROM Pokemon
-            ORDER BY pokemon_id
+                   base_sp_attack, base_sp_defense, base_speed, weight, s.generation
+            FROM Pokemon p
+            JOIN PokemonSpecies s ON s.species_id = p.species_id
+            ORDER BY p.pokemon_id
             """;
         using var reader = command.ExecuteReader();
 
@@ -171,7 +204,8 @@ internal sealed class GameData
                 reader.GetInt32(11),
                 reader.GetInt32(12),
                 reader.GetInt32(13),
-                reader.GetInt32(14));
+                reader.GetInt32(14),
+                reader.GetInt32(15));
             if (!pokemonById.TryAdd(pokemon.Id, pokemon))
                 throw new InvalidDataException($"중복된 포켓몬 번호: {pokemon.Id}");
         }

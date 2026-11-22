@@ -8,4 +8,4 @@ readonly record struct BattleAnimationFrame(
     TypeView? AttackType, bool AttackFromPlayer, double AttackProgress,
     double PlayerFaintProgress, double OpponentFaintProgress,
     StatusAnimation.Effect? StatusEffect, bool? HealingOnPlayer, SummonAnimation.Frame? Summon,
-    WithdrawAnimation.Frame? Withdraw = null);
+    WithdrawAnimation.Frame? Withdraw = null, MegaEvolutionAnimation.Frame? MegaEvolution = null);
