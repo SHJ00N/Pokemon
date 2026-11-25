@@ -56,6 +56,7 @@ internal sealed class GameData
     // 실행중 변경되지 않는 데이터이므로 FrozenDictionary 사용
     public FrozenDictionary<int, PokemonInfo> PokemonById { get; } // 포켓몬 테이블
     public FrozenDictionary<int, PokemonInfo> MegaFormsByBaseId { get; }
+    public FrozenDictionary<int, int> MegaRequiredMoveByBaseId { get; } // 메가진화하려면 알고 있어야 하는 기술 (레쿠쟈: 화룡점정)
     public FrozenDictionary<int, PokemonTypeInfo> TypesById { get; } // 타입 테이블
     public FrozenDictionary<int, PokemonMoveInfo> MovesById { get; } // 기술 테이블
     public FrozenDictionary<int, StatusConditionInfo> StatusConditionsById { get; } // 상태이상 테이블
@@ -78,11 +79,13 @@ internal sealed class GameData
         FrozenDictionary<int, MoveMetaInfo> moveMetaById,
         FrozenDictionary<int, IReadOnlyList<MoveStatChangeInfo>> moveStatChangesByMoveId,
         FrozenDictionary<int, FrozenSet<string>> moveFlagsByMoveId,
-        FrozenDictionary<int, PokemonInfo> megaFormsByBaseId)
+        FrozenDictionary<int, PokemonInfo> megaFormsByBaseId,
+        FrozenDictionary<int, int> megaRequiredMoveByBaseId)
     {
         MoveFlagsByMoveId = moveFlagsByMoveId;
         PokemonById = pokemonById;
         MegaFormsByBaseId = megaFormsByBaseId;
+        MegaRequiredMoveByBaseId = megaRequiredMoveByBaseId;
         TypesById = typesById;
         MovesById = movesById;
         EffectivenessByType = effectivenessByType;
@@ -137,8 +140,9 @@ internal sealed class GameData
         var statChanges = LoadMoveStatChanges(connection, moves);
         var flags = LoadMoveFlags(connection, moves);
         var megaForms = LoadMegaForms(connection, pokemon);
+        var megaRequiredMoves = LoadMegaRequiredMoves(connection, megaForms, moves);
         return new GameData(pokemon, types, moves, effectiveness, learnsets, statuses, statusEffects,
-            moveMeta, statChanges, flags, megaForms);
+            moveMeta, statChanges, flags, megaForms, megaRequiredMoves);
     }
 
     // 두 타입의 상성 관계에 따른 데미지 배율
@@ -170,6 +174,30 @@ internal sealed class GameData
             forms.Add(baseId, form);
         }
         return forms.ToFrozenDictionary();
+    }
+
+    // 메가진화하려면 그 기술을 알고 있어야 하는 포켓몬 (6세대 ORAS: 레쿠쟈는 화룡점정)
+    private static FrozenDictionary<int, int> LoadMegaRequiredMoves(SqliteConnection connection,
+        FrozenDictionary<int, PokemonInfo> megaForms, FrozenDictionary<int, PokemonMoveInfo> moves)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT base_pokemon_id, move_id
+            FROM PokemonFormChange
+            WHERE method = 'mega' AND move_id IS NOT NULL
+            """;
+        using var reader = command.ExecuteReader();
+        var required = new Dictionary<int, int>();
+        while (reader.Read())
+        {
+            int baseId = reader.GetInt32(0), moveId = reader.GetInt32(1);
+            if (!megaForms.ContainsKey(baseId))
+                continue;
+            if (!moves.ContainsKey(moveId))
+                throw new InvalidDataException($"포켓몬 {baseId}의 메가진화에 필요한 기술 {moveId}가 없습니다.");
+            required.Add(baseId, moveId);
+        }
+        return required.ToFrozenDictionary();
     }
 
     private static FrozenDictionary<int, PokemonInfo> LoadPokemons(SqliteConnection connection)

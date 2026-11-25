@@ -53,7 +53,6 @@ partial class RoomManager
         // 이번 턴에 먼저 쓰러졌거나, 상대가 이미 쓰러졌으면 기술을 쓰지 않는다.
         if (user.Hp == 0 || defender.Current.Hp == 0)
             return;
-        ApplyChosenMegaEvolution(room, attacker);
         user.MovedThisTurn = true;
         user.DestinyBond = user.Grudge = false;
 

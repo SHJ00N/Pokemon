@@ -9,7 +9,7 @@ sealed class BattleSide
 
     // 이번 턴에 고른 행동. 기술 또는 교체 중 하나만 값이 있다.
     public int? ChosenMove { get; set; }            // 기술 슬롯 (1~4)
-    public bool MegaEvolutionChosen { get; set; }   // 고른 기술을 쓰기 직전에 메가진화
+    public bool MegaEvolutionChosen { get; set; }   // 이번 턴에 기술을 쓰기 전(교체 다음)에 메가진화
     public int? ChosenSwitch { get; set; }          // 교체할 팀 번호 (0부터)
     public bool HasChosen => ChosenMove != null || ChosenSwitch != null;
     public bool Struggling { get; set; }            // 쓸 수 있는 기술이 없어 이번 턴에 발버둥을 쓴다.

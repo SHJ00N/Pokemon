@@ -291,7 +291,10 @@ partial class RoomManager
     private PokemonInfo? GetMegaForm(BattleSide side)
     {
         BattlePokemon pokemon = side.Current;
-        return !side.HasMegaEvolved && pokemon.Hp > 0 && !pokemon.Transformed
+        // 레쿠쟈는 화룡점정을 알고 있어야 메가진화한다(6세대 ORAS).
+        bool knowsRequiredMove = !data.MegaRequiredMoveByBaseId.TryGetValue(pokemon.Info.Id, out int requiredMove) ||
+            pokemon.Moves.Any(slot => slot.Move.Id == requiredMove);
+        return !side.HasMegaEvolved && pokemon.Hp > 0 && !pokemon.Transformed && knowsRequiredMove
             ? data.MegaFormsByBaseId.GetValueOrDefault(pokemon.Info.Id) : null;
     }
 
@@ -470,6 +473,7 @@ partial class RoomManager
                 pursuer.Current.Moves[slot - 1].Move.Id != PursuitMoveId || pursuer.Current.RechargeSlot != null)
                 continue;
             side.Current.SwitchingOut = true;
+            ApplyChosenMegaEvolution(room, pursuer);   // 메가진화를 골랐으면 따라가때리기보다 먼저 메가진화한다.
             ExecuteMove(room, pursuer, side, movesLast: false);
             side.Current.SwitchingOut = false;
             pursued.Add(pursuer);
@@ -509,6 +513,12 @@ partial class RoomManager
                 pokemon.RechargeSlot == null && !pokemon.SkyDropped)
                 LogPokemon(room, side, $"{WithJosa(pokemon.Info.Name, "은", "는")} 기합을 모으기 시작했다!");
         }
+
+        // 메가진화 (6세대): 교체가 끝난 뒤, 어느 기술보다도 먼저 빠른 포켓몬부터 메가진화한다.
+        // 그래서 상대가 먼저 공격해도 메가진화한 모습으로 맞는다. 행동 순서는 위에서 메가진화 전 스피드로 이미 정했다.
+        foreach (BattleSide side in new[] { host, guest }
+                     .OrderByDescending(side => room.TrickRoomTurns > 0 ? -GetSpeed(side) : GetSpeed(side)).ToArray())
+            ApplyChosenMegaEvolution(room, side);
 
         room.TurnQueue.Clear();
         room.TurnQueue.AddRange(attackers);
