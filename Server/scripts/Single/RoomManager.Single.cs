@@ -146,15 +146,15 @@ partial class RoomManager
     {
         lock (roomsLock)
         {
-            if (!TryGetBattle(session, out GameRoom room, out _, out BattleSide me, out BattleSide other) || room.BattleOver)
+            if (!TryGetBattle(session, out GameRoom room, out Battle battle, out BattleSide me, out BattleSide other) || room.BattleOver)
             {
                 session.QueueMessage("ERROR 지금은 항복할 수 없습니다.");
                 return;
             }
 
             room.BattleOver = true;
-            me.Player.QueueMessage("BATTLE_END LOSE SURRENDER");
-            other.Player.QueueMessage("BATTLE_END WIN SURRENDER");
+            battle.Send(me, "BATTLE_END LOSE SURRENDER");
+            battle.Send(other, "BATTLE_END WIN SURRENDER");
             Console.WriteLine($"방 {room.Id} 전투 종료 (항복: {session.Nickname})");
         }
     }
@@ -212,11 +212,11 @@ partial class RoomManager
                 case TurnProgress.Over:
                     room.BattleOver = true;
                     BattleOutcome outcome = battle.Outcome!.Value;
-                    battle.HostSide.Player.QueueMessage(outcome switch
+                    battle.Send(battle.HostSide, outcome switch
                     {
                         BattleOutcome.HostWins => "BATTLE_END WIN", BattleOutcome.GuestWins => "BATTLE_END LOSE", _ => "BATTLE_END DRAW"
                     });
-                    battle.GuestSide.Player.QueueMessage(outcome switch
+                    battle.Send(battle.GuestSide, outcome switch
                     {
                         BattleOutcome.GuestWins => "BATTLE_END WIN", BattleOutcome.HostWins => "BATTLE_END LOSE", _ => "BATTLE_END DRAW"
                     });
@@ -248,7 +248,7 @@ partial class RoomManager
         foreach (BattleSide side in new[] { battle.HostSide, battle.GuestSide })
         {
             BattleSide other = battle.GetOther(side);
-            side.Player.QueueMessage(side.SwitchingMidTurn ? "CHOOSE_SWITCH_MIDTURN"
+            battle.Send(side, side.SwitchingMidTurn ? "CHOOSE_SWITCH_MIDTURN"
                 : other.SwitchingMidTurn ? "WAIT_SWITCH"
                 : side.MustSwitch ? "CHOOSE_SWITCH"
                 : other.MustSwitch ? "WAIT_SWITCH"
@@ -268,7 +268,7 @@ partial class RoomManager
 
         room = found;
         battle = current;
-        (me, other) = current.HostSide.Player.Id == session.Id
+        (me, other) = current.HostSide.Players[0].Session == session
             ? (current.HostSide, current.GuestSide) : (current.GuestSide, current.HostSide);
         return true;
     }

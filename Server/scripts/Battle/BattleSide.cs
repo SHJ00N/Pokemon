@@ -1,11 +1,10 @@
-// 전투에 참여한 플레이어 한 명의 팀과 이번 턴 선택
+// 전투의 한 편: 그 편 플레이어들, 팀, 이번 턴 선택, 편 전체에 걸린 효과
 sealed class BattleSide
 {
-    public ClientSession Player { get; }
+    public BattlePlayer[] Players { get; }          // 1:1은 한 명
     public BattlePokemon[] Team { get; }
     public int Active { get; set; }                 // 현재 출전 중인 팀 번호 (0부터)
     public BattlePokemon Current => Team[Active];
-    public bool HasMegaEvolved { get; set; }        // 이 전투에서 메가진화를 실제로 사용했는지
 
     // 이번 턴에 고른 행동. 기술 또는 교체 중 하나만 값이 있다.
     public int? ChosenMove { get; set; }            // 기술 슬롯 (1~4)
@@ -48,9 +47,9 @@ sealed class BattleSide
     public BattlePokemon? FutureAttackUser { get; set; }
     public PokemonMoveInfo? FutureAttackMove { get; set; }
 
-    public BattleSide(ClientSession player, BattlePokemon[] team)
+    public BattleSide(BattlePlayer[] players, BattlePokemon[] team)
     {
-        Player = player;
+        Players = players;
         Team = team;
     }
 }

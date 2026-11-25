@@ -38,8 +38,12 @@ sealed partial class Battle
         GuestSide = guest;
     }
 
-    // 이 편을 보는 플레이어에게 보낸다.
-    private void Send(BattleSide side, string message) => side.Player.QueueMessage(message);
+    // 이 편의 플레이어들에게 보낸다. AI(접속 없음)에게는 보내지 않는다. 모드(1:1·2:2)의 안내도 이 길로 보낸다.
+    public void Send(BattleSide side, string message)
+    {
+        foreach (BattlePlayer player in side.Players)
+            player.Session?.QueueMessage(message);
+    }
 
     // 새 턴을 시작한다. 난동 기술·2턴 기술의 공격 턴·반동으로 쉬는 턴인 포켓몬은 행동을 자동으로 정한다(LOCKED).
     public void BeginTurn()
@@ -76,7 +80,7 @@ sealed partial class Battle
         side.ChosenMegaForm = null;
         string name = side.Current.Info.Name;
         side.Current.MegaEvolve(form);
-        side.HasMegaEvolved = true;
+        side.Players[0].HasMegaEvolved = true;   // 1:1은 편마다 플레이어 한 명
         SendBattleState(megaEvolved: side);
         LogPokemon(side, $"{WithJosa(name, "이", "가")} {WithJosa(form.Name, "으로", "로")} 메가진화했다!");
     }
@@ -87,7 +91,7 @@ sealed partial class Battle
         // 레쿠쟈는 화룡점정을 알고 있어야 메가진화한다(6세대 ORAS).
         bool knowsRequiredMove = !data.MegaRequiredMoveByBaseId.TryGetValue(pokemon.Info.Id, out int requiredMove) ||
             pokemon.Moves.Any(slot => slot.Move.Id == requiredMove);
-        return !side.HasMegaEvolved && pokemon.Hp > 0 && !pokemon.Transformed && knowsRequiredMove
+        return !side.Players[0].HasMegaEvolved && pokemon.Hp > 0 && !pokemon.Transformed && knowsRequiredMove
             ? data.MegaFormsByBaseId.GetValueOrDefault(pokemon.Info.Id) ?? [] : [];
     }
 

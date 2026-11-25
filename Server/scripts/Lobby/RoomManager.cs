@@ -247,9 +247,11 @@ partial class RoomManager
         ids.Distinct().Count() == ids.Length &&
         ids.All(id => data.LearnableMovesByPokemonId[selection.PokemonId].Contains(id));
 
-    private BattleSide CreateSide(ClientSession player, PokemonSelection[] team) => new(player, team
-        .Select(p => new BattlePokemon(data.PokemonById[p.PokemonId], p.MoveIds.Select(id => data.MovesById[id]).ToArray()))
-        .ToArray());
+    // 1:1의 한 편: 플레이어 한 명이 팀 전체를 맡는다.
+    private BattleSide CreateSide(ClientSession player, PokemonSelection[] team) => new(
+        [new BattlePlayer(player, Enumerable.Range(0, team.Length).ToArray())],
+        team.Select(p => new BattlePokemon(data.PokemonById[p.PokemonId], p.MoveIds.Select(id => data.MovesById[id]).ToArray()))
+            .ToArray());
 
     public void LeaveRoom(ClientSession session, bool notify = false)
     {
