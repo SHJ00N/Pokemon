@@ -4,22 +4,24 @@ using Pokemon.Protocol;
 // 화면 정보(BattleView 등) 만들기. 타입·기술 정보는 로비의 포켓몬 목록(RoomManager)도 같이 쓴다.
 partial class Battle
 {
-    public void SendBattleState(BattleSide? megaEvolved = null)
+    // 1:1 화면: 편마다 자기 자리(첫 자리)와 상대 편 첫 자리를 보여 준다. megaEvolved: 방금 메가진화한 자리
+    public void SendBattleState(BattleSlot? megaEvolved = null)
     {
         foreach (BattleSide side in new[] { HostSide, GuestSide })
         {
+            BattleSlot mine = side.Slots[0], theirs = DefaultTarget(mine);
             var team = side.Team.Select(p => new TeamMemberView(GetPokemon(p),
                 p.Moves.Select(slot => GetMove(slot) with
                 {
-                    BlockedByGravity = p == side.Current && IsBlockedByGravity(slot.Move)
+                    BlockedByGravity = p == mine.Current && IsBlockedByGravity(slot.Move)
                 }).ToArray()));
-            MegaFormView[] megaForms = GetMegaForms(side).Select(form => new MegaFormView(form.Id, form.Name)).ToArray();
+            MegaFormView[] megaForms = GetMegaForms(mine).Select(form => new MegaFormView(form.Id, form.Name)).ToArray();
             string prefix = megaEvolved == null ? "BATTLE_STATE "
-                : megaEvolved == side ? "BATTLE_MEGA SELF " : "BATTLE_MEGA OPPONENT ";
+                : megaEvolved.Side == side ? "BATTLE_MEGA SELF " : "BATTLE_MEGA OPPONENT ";
             Send(side, prefix + JsonSerializer.Serialize(
-                new BattleView(team.ToArray(), side.Active, GetPokemon(GetOther(side).Current),
+                new BattleView(team.ToArray(), mine.Active, GetPokemon(theirs.Current),
                     GetFieldEffects(), megaForms.Length > 0, Weather, Terrain, megaForms,
-                    GetSideEffects(side), GetSideEffects(GetOther(side)))));
+                    GetSideEffects(side), GetSideEffects(theirs.Side))));
         }
     }
 

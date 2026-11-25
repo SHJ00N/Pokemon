@@ -91,7 +91,7 @@ partial class Battle
         GravityMoveId, TrickRoomMoveId, WonderRoomMoveId, MudSportMoveId, WaterSportMoveId, IonDelugeMoveId, FairyLockMoveId
     ];
 
-    private bool UseFieldMove(BattleSide side, PokemonMoveInfo move)
+    private bool UseFieldMove(BattleSlot side, PokemonMoveInfo move)
     {
         if (WeatherMoves.TryGetValue(move.Id, out string? weather))
         {
@@ -154,7 +154,7 @@ partial class Battle
     }
 
     // 이미 같은 효과가 있으면 실패한다. 성공하면 true
-    private bool StartFieldEffect(BattleSide side, int turnsLeft, int duration,
+    private bool StartFieldEffect(BattleSlot side, int turnsLeft, int duration,
         Action<int> setTurns, string message)
     {
         if (turnsLeft > 0)
@@ -171,7 +171,7 @@ partial class Battle
     // 전자부유·텔레키네시스도 끝난다.
     private void BringDownFromSky()
     {
-        foreach (BattleSide side in new[] { HostSide!, GuestSide! })
+        foreach (BattleSlot side in AllSlots)
         {
             BattlePokemon pokemon = side.Current;
             bool floating = pokemon.MagnetRiseTurns > 0 || pokemon.TelekinesisTurns > 0;
@@ -179,7 +179,7 @@ partial class Battle
             bool flying = pokemon.Hidden == Air && !pokemon.SkyDropped;
             if (flying)
             {
-                EndCharging(side, GetOther(side));
+                EndCharging(side, DefaultTarget(side));
                 TurnQueue.Remove(side);
             }
             if (flying || floating)
@@ -260,20 +260,20 @@ partial class Battle
 
     // 턴 끝 처음: 날씨의 남은 턴을 줄이고, 계속되면 모래바람·싸라기눈 데미지를 준다.
     // 바위·땅·강철 타입은 모래바람, 얼음 타입은 싸라기눈에 데미지를 받지 않는다. 구멍파기·다이빙으로 숨은 포켓몬도 받지 않는다.
-    private void TickWeather(IEnumerable<BattleSide> sides)
+    private void TickWeather(IEnumerable<BattleSlot> sides)
     {
         if (Weather is not string weather)
             return;
         if (--WeatherTurns == 0)
         {
             Weather = null;
-            LogBoth(HostSide!, WeatherText[weather].End);
+            LogBoth(HostSide.Slots[0], WeatherText[weather].End);
             return;
         }
-        LogBoth(HostSide!, WeatherText[weather].Continue);
+        LogBoth(HostSide.Slots[0], WeatherText[weather].Continue);
         if (weather is not (Sand or Hail))
             return;
-        foreach (BattleSide side in sides)
+        foreach (BattleSlot side in sides)
         {
             BattlePokemon pokemon = side.Current;
             bool immune = weather == Sand
@@ -290,11 +290,11 @@ partial class Battle
     }
 
     // 그래스필드: 턴이 끝날 때 땅에 있는 포켓몬이 최대 HP의 1/16을 회복한다.
-    private void GrassyTerrainHealing(IEnumerable<BattleSide> sides)
+    private void GrassyTerrainHealing(IEnumerable<BattleSlot> sides)
     {
         if (Terrain != GrassyTerrain)
             return;
-        foreach (BattleSide side in sides)
+        foreach (BattleSlot side in sides)
             if (IsGrounded(side.Current) && Heal(side, side.Current.MaxHp / 16, "그래스필드"))
                 SendBattleState();
     }
@@ -302,7 +302,7 @@ partial class Battle
     // 턴 끝 마지막: 필드·중력·원더룸·흙놀이·물놀이·페어리록의 남은 턴을 줄이고, 플라스마샤워를 끝낸다.
     private void TickFields()
     {
-        BattleSide host = HostSide!;
+        BattleSlot host = HostSide.Slots[0];   // 양쪽에 같은 문구를 보낼 때 쓰는 자리
         if (Terrain is string terrain && --TerrainTurns == 0)
         {
             Terrain = null;

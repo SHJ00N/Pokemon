@@ -32,7 +32,7 @@ partial class Battle
     private static readonly HashSet<int> MimicBannedMoveIds = [MimicMoveId, SketchMoveId, TransformMoveId, StruggleMoveId, MetronomeMoveId, 448];
 
     // slot: 이 기술의 슬롯 (흉내내기·스케치가 바꿀 슬롯)
-    private void UseCopyMove(BattleSide attacker, BattleSide defender, PokemonMoveInfo move, int slot)
+    private void UseCopyMove(BattleSlot attacker, BattleSlot defender, PokemonMoveInfo move, int slot)
     {
         BattlePokemon user = attacker.Current, target = defender.Current;
         string userSubject = WithJosa(user.Info.Name, "은", "는");
@@ -110,7 +110,7 @@ partial class Battle
     }
 
     // 타입을 바꾼다(더해진 세 번째 타입은 없어진다). 이미 그 타입이면 실패
-    private void ChangeTypes(BattleSide side, BattlePokemon pokemon, int[] types)
+    private void ChangeTypes(BattleSlot side, BattlePokemon pokemon, int[] types)
     {
         if (pokemon.AddedType == null && pokemon.BaseTypes.Order().SequenceEqual(types.Order()))
         {
@@ -124,7 +124,7 @@ partial class Battle
     }
 
     // 다른 기술을 쓰는 기술이 쓸 기술. 쓸 기술이 없으면 실패를 알리고 null
-    private PokemonMoveInfo? PickCalledMove(BattleSide attacker, BattleSide defender, PokemonMoveInfo move)
+    private PokemonMoveInfo? PickCalledMove(BattleSlot attacker, BattleSlot defender, PokemonMoveInfo move)
     {
         BattlePokemon user = attacker.Current, target = defender.Current;
         LogPokemon(attacker, $"{user.Info.Name}의 {move.Name}!");
@@ -149,7 +149,7 @@ partial class Battle
                 break;
             case AssistMoveId:
                 // 우리 팀 다른 포켓몬의 기술 중 무작위
-                PokemonMoveInfo[] team = attacker.Team.Where(member => !ReferenceEquals(member, user))
+                PokemonMoveInfo[] team = attacker.Side.Team.Where(member => !ReferenceEquals(member, user))
                     .SelectMany(member => member.Moves).Select(slot => slot.Move).Where(Allowed).ToArray();
                 if (team.Length > 0)
                     called = team[Random.Next(team.Length)];

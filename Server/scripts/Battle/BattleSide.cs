@@ -1,25 +1,10 @@
-// 전투의 한 편: 그 편 플레이어들, 팀, 이번 턴 선택, 편 전체에 걸린 효과
+// 전투의 한 편: 그 편의 플레이어들, 팀, 출전 자리들, 편 전체에 걸린 효과
 sealed class BattleSide
 {
     public BattlePlayer[] Players { get; }          // 1:1은 한 명
     public BattlePokemon[] Team { get; }
-    public int Active { get; set; }                 // 현재 출전 중인 팀 번호 (0부터)
-    public BattlePokemon Current => Team[Active];
+    public BattleSlot[] Slots { get; }              // 플레이어마다 한 자리. 처음에는 그 플레이어가 맡은 첫 포켓몬이 나온다.
 
-    // 이번 턴에 고른 행동. 기술 또는 교체 중 하나만 값이 있다.
-    public int? ChosenMove { get; set; }            // 기술 슬롯 (1~4)
-    public PokemonInfo? ChosenMegaForm { get; set; } // 이번 턴에 기술을 쓰기 전(교체 다음)에 이 폼으로 메가진화
-    public int? ChosenSwitch { get; set; }          // 교체할 팀 번호 (0부터)
-    public bool HasChosen => ChosenMove != null || ChosenSwitch != null;
-    public bool Struggling { get; set; }            // 쓸 수 있는 기술이 없어 이번 턴에 발버둥을 쓴다.
-    public BattlePokemon? TurnActor { get; set; }   // 이번 턴에 행동을 고른 포켓몬. 강제 교체로 나온 포켓몬은 행동하지 않는다.
-
-    // 턴 도중 교체: 유턴·볼트체인지·막말내뱉기·배턴터치를 쓴 뒤 다음 포켓몬을 고르는 중 (CHOOSE_SWITCH_MIDTURN)
-    public bool SwitchingMidTurn { get; set; }
-    public bool BatonPassing { get; set; }          // 배턴터치로 교체 중: 랭크 등을 넘겨준다.
-
-    // 출전 포켓몬이 쓰러져 다음 포켓몬을 골라야 하는 상태
-    public bool MustSwitch { get; set; }
     public bool FaintedThisTurn { get; set; }       // 이번 턴에 우리 편 포켓몬이 쓰러졌는지
     public bool FaintedLastTurn { get; set; }       // 지난 턴에 쓰러졌는지 (원수갚기)
 
@@ -34,22 +19,16 @@ sealed class BattleSide
     public bool WideGuard { get; set; }             // 와이드가드: 이번 턴에 여러 대상을 노리는 공격을 막음
     public bool MatBlock { get; set; }              // 마룻바닥세워막기: 이번 턴에 공격 기술을 막음
     public bool CraftyShield { get; set; }          // 트릭가드: 이번 턴에 상대의 변화 기술을 막음
-    public int WishTurns { get; set; }              // 희망사항: 0이 되는 턴 끝에 이 자리의 포켓몬이 WishHeal만큼 회복
-    public int WishHeal { get; set; }
     // 설치기: 이 편에 교체해서 나오는 포켓몬에게 효과가 있다. 고속스핀·안개제거로 없앤다.
     public int Spikes { get; set; }                 // 압정뿌리기 (최대 3층)
     public int ToxicSpikes { get; set; }            // 독압정 (최대 2층)
     public bool StealthRock { get; set; }           // 스텔스록
     public bool StickyWeb { get; set; }             // 끈적끈적네트
-    public PokemonMoveInfo? HealingWish { get; set; } // 치유소원·초승달춤: 다음에 나오는 포켓몬을 회복시킨다.
-    // 미래예지·파멸의소원: 0이 되는 턴 끝에 이 자리의 포켓몬이 FutureAttackUser의 FutureAttackMove를 맞는다.
-    public int FutureAttackTurns { get; set; }
-    public BattlePokemon? FutureAttackUser { get; set; }
-    public PokemonMoveInfo? FutureAttackMove { get; set; }
 
     public BattleSide(BattlePlayer[] players, BattlePokemon[] team)
     {
         Players = players;
         Team = team;
+        Slots = players.Select((player, index) => new BattleSlot(this, index, player, player.TeamIndices[0])).ToArray();
     }
 }

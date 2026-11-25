@@ -47,7 +47,7 @@ partial class Battle
     // 한 포켓몬의 기술 한 번을 처리한다. 반동·붙잡힘 → 행동 가능 판정 → 2턴 기술 첫 턴 → 숨은 상대·방어·매직코트
     // → 기술 효과 → 자폭·반동 → 난동 기술 종료 순서다.
     // movesLast: 이번 턴에 이 포켓몬 뒤로 행동할 포켓몬이 없는지 (방어·매직코트는 이때 실패한다)
-    private void ExecuteMove(BattleSide attacker, BattleSide defender, bool movesLast)
+    private void ExecuteMove(BattleSlot attacker, BattleSlot defender, bool movesLast)
     {
         BattlePokemon user = attacker.Current;
         // 이번 턴에 먼저 쓰러졌거나, 상대가 이미 쓰러졌으면 기술을 쓰지 않는다.
@@ -91,7 +91,7 @@ partial class Battle
             move = user.ChargingMove!;
         // 기술을 고른 뒤에 사용 제한이 생기거나 PP가 바닥났을 수 있다.
         bool startsMove = !continuing && user.LockedSlot == null;
-        if (ppSlot != null && startsMove && MoveBlockedBy(attacker, defender, slot) is string cause)
+        if (ppSlot != null && startsMove && MoveBlockedBy(attacker, slot) is string cause)
         {
             LogPokemon(attacker, $"{subject} {cause} 때문에 {WithJosa(move.Name, "을", "를")} 쓸 수 없다!");
             return;
@@ -266,7 +266,7 @@ partial class Battle
     }
 
     // 잠꼬대로 쓸 기술을 고른다. 깨어 있거나 고를 수 있는 기술이 없으면 실패하고 null을 돌려준다.
-    private PokemonMoveInfo? PickSleepTalkMove(BattleSide side, PokemonMoveInfo sleepTalk)
+    private PokemonMoveInfo? PickSleepTalkMove(BattleSlot side, PokemonMoveInfo sleepTalk)
     {
         BattlePokemon user = side.Current;
         LogPokemon(side, $"{user.Info.Name}의 {sleepTalk.Name}!");
@@ -281,7 +281,7 @@ partial class Battle
     }
 
     // 공격이 맞았으면(대타가 맞은 것 포함) true
-    private bool UseDamagingMove(BattleSide attacker, BattleSide defender, PokemonMoveInfo move,
+    private bool UseDamagingMove(BattleSlot attacker, BattleSlot defender, PokemonMoveInfo move,
         BattleMoveSlot? ppSlot)
     {
         BattlePokemon user = attacker.Current, target = defender.Current;
@@ -393,7 +393,7 @@ partial class Battle
 
     // 맞은 상대에게 거는 추가 효과: 랭크 초기화 → 얼음 녹이기 → 상태이상 → 능력치 하락 → 풀죽음
     // 추가 효과는 실패해도 알리지 않는다.
-    private void ApplyTargetEffects(BattleSide attacker, BattleSide defender, PokemonMoveInfo move)
+    private void ApplyTargetEffects(BattleSlot attacker, BattleSlot defender, PokemonMoveInfo move)
     {
         BattlePokemon target = defender.Current;
         // 클리어스모그: 맞은 상대의 랭크를 모두 원래대로 되돌린다.
@@ -414,7 +414,7 @@ partial class Battle
 
         // 흰안개가 있으면 능력치 하락이 막힌다.
         var changes = GetAttackStatChanges(move, "opponent");
-        if (changes.Length > 0 && defender.MistTurns == 0 && Random.Next(100) < changes[0].Chance)
+        if (changes.Length > 0 && defender.Side.MistTurns == 0 && Random.Next(100) < changes[0].Chance)
             foreach (var (stat, change, _) in changes)
                 ChangeStage(defender, stat, change, announceFailure: false);
 
@@ -434,7 +434,7 @@ partial class Battle
 
     // 기술을 쓴 쪽에게 오는 추가 효과: 능력치 변화 → HP 흡수 → 반동
     // dealt: 대타를 포함해 실제로 준 데미지. 흡수·반동은 이 값의 drain%(DB, 음수면 반동)이다.
-    private void ApplyUserEffects(BattleSide attacker, PokemonMoveInfo move, int dealt)
+    private void ApplyUserEffects(BattleSlot attacker, PokemonMoveInfo move, int dealt)
     {
         BattlePokemon user = attacker.Current;
         var changes = GetAttackStatChanges(move, "self");
@@ -455,19 +455,19 @@ partial class Battle
         }
     }
 
-    private void SendMoveEffect(BattleSide attacker, PokemonMoveInfo move, double effectiveness)
+    private void SendMoveEffect(BattleSlot attacker, PokemonMoveInfo move, double effectiveness)
     {
         string color = data.TypesById[move.TypeId].ColorRgb;
         string type = data.TypesById[move.TypeId].Name;
         Send(HostSide, FormattableString.Invariant(
-            $"BATTLE_EFFECT {move.TypeId} {color} {type} {(attacker == HostSide ? "SELF" : "OPPONENT")} {effectiveness}"));
+            $"BATTLE_EFFECT {move.TypeId} {color} {type} {(attacker.Side == HostSide ? "SELF" : "OPPONENT")} {effectiveness}"));
         Send(GuestSide, FormattableString.Invariant(
-            $"BATTLE_EFFECT {move.TypeId} {color} {type} {(attacker == GuestSide ? "SELF" : "OPPONENT")} {effectiveness}"));
+            $"BATTLE_EFFECT {move.TypeId} {color} {type} {(attacker.Side == GuestSide ? "SELF" : "OPPONENT")} {effectiveness}"));
     }
 
     // reflected: 매직코트로 되돌아온 기술 (기술 이름 기록은 이미 남겼다)
     // slot: 이 기술의 슬롯 (흉내내기·스케치가 바꿀 슬롯)
-    private void UseStatusMove(BattleSide attacker, BattleSide defender, PokemonMoveInfo move,
+    private void UseStatusMove(BattleSlot attacker, BattleSlot defender, PokemonMoveInfo move,
         bool movesLast, bool reflected = false, int slot = 0)
     {
         BattlePokemon user = attacker.Current;
@@ -550,8 +550,8 @@ partial class Battle
         SendStatEffects(defender, target, targetStages, targetFocusEnergy, move.TypeId);
         if (!userRankRaised && ReferenceEquals(attacker.Current, user) && (fieldMoveSucceeded || HasNewBuff(attacker, buffsBefore)))
         {
-            Send(attacker, $"BATTLE_BUFF {move.TypeId} SELF");
-            Send(defender, $"BATTLE_BUFF {move.TypeId} OPPONENT");
+            Send(attacker.Side, $"BATTLE_BUFF {move.TypeId} SELF");
+            Send(defender.Side, $"BATTLE_BUFF {move.TypeId} OPPONENT");
         }
         if (causesStatus)
             ApplyStatusEffects(attacker, defender, move, null, announceFailure: true);
@@ -559,7 +559,7 @@ partial class Battle
 
     // 치료방울·아로마테라피: 교체로 들어가 있는 포켓몬까지 우리 팀 전체의 상태이상을 고친다. (혼란·헤롱헤롱은 그대로)
     // 사이코시프트: 자신의 상태이상을 상대에게 옮기고 자신은 낫는다.
-    private void UseStatusCureMove(BattleSide attacker, BattleSide defender, PokemonMoveInfo move)
+    private void UseStatusCureMove(BattleSlot attacker, BattleSlot defender, PokemonMoveInfo move)
     {
         BattlePokemon user = attacker.Current, target = defender.Current;
         // 리프레시: 자신의 독·맹독·마비·화상을 고친다.
@@ -592,7 +592,7 @@ partial class Battle
             return;
         }
 
-        BattlePokemon[] cured = attacker.Team.Where(member => member.Hp > 0 && member.Status != null).ToArray();
+        BattlePokemon[] cured = attacker.Side.Team.Where(member => member.Hp > 0 && member.Status != null).ToArray();
         if (cured.Length == 0)
         {
             LogBoth(attacker, "하지만 실패했다!");
@@ -608,7 +608,7 @@ partial class Battle
     }
 
     // 미스트필드·일렉트릭필드에서 땅에 있으면 잠들 수 없어서 실패한다.
-    private void UseRest(BattleSide side)
+    private void UseRest(BattleSlot side)
     {
         BattlePokemon user = side.Current;
         if (user.Hp == user.MaxHp || user.Status == Sleep || FieldBlocksStatus(user, Sleep) != null)
@@ -627,7 +627,7 @@ partial class Battle
 
     // 기술의 상태이상 효과를 적용한다. timing이 null이면 난동 종료(after_sequence)를 뺀 사용 시점 효과 전부다.
     // effect_group 0은 효과마다 따로 판정하고, 같은 양수 그룹은 그중 최대 하나만 추첨한다(예: 트라이어택).
-    private void ApplyStatusEffects(BattleSide attacker, BattleSide defender,
+    private void ApplyStatusEffects(BattleSlot attacker, BattleSlot defender,
         PokemonMoveInfo move, string? timing, bool announceFailure)
     {
         var effects = data.MoveStatusEffectsByMoveId[move.Id]
@@ -649,7 +649,7 @@ partial class Battle
             if (chosen == null)
                 continue;
 
-            BattleSide target = chosen.Target == "self" ? attacker : defender;
+            BattleSlot target = chosen.Target == "self" ? attacker : defender;
             string code = data.StatusConditionsById[chosen.StatusId].Code;
             if (chosen.Timing == "end_next_turn")
                 TryMakeDrowsy(target, announceFailure);
@@ -659,14 +659,14 @@ partial class Battle
     }
 
     // fromOpponent: 상대 기술로 거는 상태이상인지 (신비의부적은 이것만 막는다)
-    private void TryInflict(BattleSide side, string code, bool announceFailure, bool fromOpponent)
+    private void TryInflict(BattleSlot side, string code, bool announceFailure, bool fromOpponent)
     {
         BattlePokemon target = side.Current;
         if (target.Hp == 0)
             return;
 
         // 신비의부적: 상대 기술로 걸리는 상태이상과 혼란을 막는다. (헤롱헤롱은 막지 못한다)
-        if (fromOpponent && side.SafeguardTurns > 0 && code != Infatuation)
+        if (fromOpponent && side.Side.SafeguardTurns > 0 && code != Infatuation)
         {
             if (announceFailure)
                 LogSide(side, "{0}은 신비의 베일에 보호받고 있다!");
@@ -722,7 +722,7 @@ partial class Battle
     }
 
     // 날씨·필드가 상태이상을 막으면(FieldBlocksStatus) 알리고 true
-    private bool BlockedByField(BattleSide side, string code, bool announceFailure)
+    private bool BlockedByField(BattleSlot side, string code, bool announceFailure)
     {
         if (FieldBlocksStatus(side.Current, code) is not string reason)
             return false;
@@ -737,10 +737,10 @@ partial class Battle
     }
 
     // 하품: 다음 턴이 끝날 때 잠든다. 신비의부적이 있거나 미스트필드·일렉트릭필드에서 땅에 있으면 실패한다.
-    private void TryMakeDrowsy(BattleSide side, bool announceFailure)
+    private void TryMakeDrowsy(BattleSlot side, bool announceFailure)
     {
         BattlePokemon target = side.Current;
-        if (target.Status != null || target.DrowsyTurns > 0 || side.SafeguardTurns > 0)
+        if (target.Status != null || target.DrowsyTurns > 0 || side.Side.SafeguardTurns > 0)
         {
             if (announceFailure) LogBoth(side, "하지만 실패했다!");
             return;
@@ -763,7 +763,7 @@ partial class Battle
     };
 
     // 기술을 쓰기 전에 잠듦 → 얼음 → 풀죽음 → 혼란 → 헤롱헤롱 → 마비 순서로 행동할 수 있는지 판정한다.
-    private bool CanAct(BattleSide side, PokemonMoveInfo move)
+    private bool CanAct(BattleSlot side, PokemonMoveInfo move)
     {
         BattlePokemon user = side.Current;
         string subject = WithJosa(user.Info.Name, "은", "는");
@@ -853,11 +853,10 @@ partial class Battle
     // → 우리 편 효과 턴 감소 → 필드 효과 턴 감소
     private void EndOfTurn()
     {
-        IEnumerable<BattleSide> sides = new[] { HostSide!, GuestSide! }
-            .OrderByDescending(GetSpeed).ToList();
+        IEnumerable<BattleSlot> sides = AllSlots.OrderByDescending(GetSpeed).ToList();
 
         ClearTurnProtection();          // 방어·버티기·매직코트·패스트가드는 이번 턴까지만
-        foreach (BattleSide side in sides)
+        foreach (BattleSlot side in sides)
             side.Current.Roosting = false;   // 날개쉬기로 없어진 비행 타입은 이번 턴까지만
         TickWeather(sides);
         TickFutureAttacks();            // 미래예지·파멸의소원
@@ -865,7 +864,7 @@ partial class Battle
         EndOfTurnHealing(sides);
         TickLeechSeed(sides);
 
-        foreach (BattleSide side in sides)
+        foreach (BattleSlot side in sides)
         {
             BattlePokemon pokemon = side.Current;
             if (pokemon.Hp == 0 || pokemon.Status is not (Burn or Poison or BadPoison))
@@ -886,7 +885,7 @@ partial class Battle
         TickBinding(sides);
         TickEffects(sides);   // 악몽·저주·멸망의노래·기술 제한 등의 남은 턴
 
-        foreach (BattleSide side in sides)
+        foreach (BattleSlot side in sides)
         {
             BattlePokemon pokemon = side.Current;
             if (pokemon.Hp > 0 && pokemon.DrowsyTurns > 0 && --pokemon.DrowsyTurns == 0)
@@ -899,7 +898,7 @@ partial class Battle
     }
 
     // HP를 줄이고, 쓰러지면 Faint로 처리한다.
-    private void DealDamage(BattleSide side, int damage)
+    private void DealDamage(BattleSlot side, int damage)
     {
         BattlePokemon pokemon = side.Current;
         if (pokemon.Hp == 0)
@@ -911,19 +910,19 @@ partial class Battle
     }
 
     // 쓰러졌다는 기록을 남기고, 남은 포켓몬이 있으면 교체를 요구한다.
-    private void Faint(BattleSide side)
+    private void Faint(BattleSlot side)
     {
-        side.FaintedThisTurn = true;
+        side.Side.FaintedThisTurn = true;
         LogPokemon(side, $"{WithJosa(side.Current.Info.Name, "이", "가")} 쓰러졌다!");
-        if (side.Team.Any(member => member.Hp > 0))
+        if (side.Side.Team.Any(member => member.Hp > 0))
             side.MustSwitch = true;
     }
 
     // 연출 대상 기준으로 양쪽 클라이언트의 SELF/OPPONENT를 지정한다.
-    private void SendStatusEffect(BattleSide side, string code)
+    private void SendStatusEffect(BattleSlot side, string code)
     {
-        Send(side, $"BATTLE_STATUS {code} SELF");
-        Send(GetOther(side), $"BATTLE_STATUS {code} OPPONENT");
+        Send(side.Side, $"BATTLE_STATUS {code} SELF");
+        Send(DefaultTarget(side).Side, $"BATTLE_STATUS {code} OPPONENT");
     }
 
     // 타입 상성 배율 (지금 타입 기준). 땅에 있는지도 반영한다:
@@ -964,8 +963,8 @@ partial class Battle
     private string StatusName(string code) => data.StatusConditionsById.Values.First(s => s.Code == code).Name;
 
     // owner 팀의 포켓몬 이야기: owner에게는 그대로, 상대에게는 "상대 "를 붙여 보낸다.
-    private void LogPokemon(BattleSide owner, string text) =>
+    private void LogPokemon(BattleSlot owner, string text) =>
         Log(owner, text, "상대 " + text);
 
-    private void LogBoth(BattleSide side, string text) => Log(side, text, text);
+    private void LogBoth(BattleSlot side, string text) => Log(side, text, text);
 }

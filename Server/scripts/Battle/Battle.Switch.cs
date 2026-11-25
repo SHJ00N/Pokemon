@@ -25,7 +25,7 @@ partial class Battle
         SpikesMoveId, ToxicSpikesMoveId, StealthRockMoveId, StickyWebMoveId, RoarMoveId, WhirlwindMoveId
     ];
 
-    private void UseSwitchMove(BattleSide attacker, BattleSide defender, PokemonMoveInfo move)
+    private void UseSwitchMove(BattleSlot attacker, BattleSlot defender, PokemonMoveInfo move)
     {
         BattlePokemon user = attacker.Current, target = defender.Current;
         switch (move.Id)
@@ -50,23 +50,23 @@ partial class Battle
                 break;
 
             case SpikesMoveId:
-                AddHazard(attacker, defender, defender.Spikes < 3, () => defender.Spikes++, "{0} 발밑에 압정이 흩어졌다!");
+                AddHazard(attacker, defender, defender.Side.Spikes < 3, () => defender.Side.Spikes++, "{0} 발밑에 압정이 흩어졌다!");
                 break;
             case ToxicSpikesMoveId:
-                AddHazard(attacker, defender, defender.ToxicSpikes < 2, () => defender.ToxicSpikes++, "{0} 발밑에 독압정이 흩어졌다!");
+                AddHazard(attacker, defender, defender.Side.ToxicSpikes < 2, () => defender.Side.ToxicSpikes++, "{0} 발밑에 독압정이 흩어졌다!");
                 break;
             case StealthRockMoveId:
-                AddHazard(attacker, defender, !defender.StealthRock, () => defender.StealthRock = true,
+                AddHazard(attacker, defender, !defender.Side.StealthRock, () => defender.Side.StealthRock = true,
                     "{0} 주변에 뾰족한 바위가 떠다니기 시작했다!");
                 break;
             case StickyWebMoveId:
-                AddHazard(attacker, defender, !defender.StickyWeb, () => defender.StickyWeb = true,
+                AddHazard(attacker, defender, !defender.Side.StickyWeb, () => defender.Side.StickyWeb = true,
                     "{0} 발밑에 끈적끈적네트가 펼쳐졌다!");
                 break;
 
             case PartingShotMoveId:
                 // 상대 공격·특수공격 -1 뒤에 교체한다. 6세대는 능력치가 내려가지 않아도 교체한다.
-                if (defender.MistTurns > 0)
+                if (defender.Side.MistTurns > 0)
                     LogPokemon(defender, $"{WithJosa(target.Info.Name, "은", "는")} 흰안개에 보호되고 있다!");
                 else
                 {
@@ -90,7 +90,7 @@ partial class Battle
         }
     }
 
-    private void AddHazard(BattleSide attacker, BattleSide defender, bool canAdd, Action add,
+    private void AddHazard(BattleSlot attacker, BattleSlot defender, bool canAdd, Action add,
         string message)
     {
         if (!canAdd)
@@ -106,11 +106,11 @@ partial class Battle
     // 스텔스록: 최대 HP × 바위 타입 상성 / 8. 압정뿌리기: 1층 1/8, 2층 1/6, 3층 1/4.
     // 독압정: 1층 독, 2층 맹독 (독 타입이 밟으면 없어진다). 끈적끈적네트: 스피드 -1.
     // 스텔스록 말고는 땅에 있는 포켓몬에게만 효과가 있다. 치유소원·초승달춤은 설치기 다음에 HP와 상태이상을 모두 회복시킨다.
-    private void ApplyEntryHazards(BattleSide side)
+    private void ApplyEntryHazards(BattleSlot side)
     {
         BattlePokemon pokemon = side.Current;
         string name = pokemon.Info.Name, subject = WithJosa(name, "은", "는");
-        if (side.StealthRock)
+        if (side.Side.StealthRock)
         {
             double multiplier = pokemon.Types.Aggregate(1.0, (product, type) => product * data.GetMultiplier(TypeIdOf("바위"), type));
             int damage = Math.Max(1, (int)(pokemon.MaxHp * multiplier / 8));
@@ -118,26 +118,26 @@ partial class Battle
             DealDamage(side, damage);
         }
         bool grounded = IsGrounded(pokemon);
-        if (pokemon.Hp > 0 && grounded && side.Spikes > 0)
+        if (pokemon.Hp > 0 && grounded && side.Side.Spikes > 0)
         {
-            int damage = Math.Max(1, side.Spikes switch { 1 => pokemon.MaxHp / 8, 2 => pokemon.MaxHp / 6, _ => pokemon.MaxHp / 4 });
+            int damage = Math.Max(1, side.Side.Spikes switch { 1 => pokemon.MaxHp / 8, 2 => pokemon.MaxHp / 6, _ => pokemon.MaxHp / 4 });
             LogPokemon(side, $"{subject} 압정뿌리기의 데미지를 입었다! ({damage} 데미지)");
             DealDamage(side, damage);
         }
-        if (pokemon.Hp > 0 && grounded && side.ToxicSpikes > 0)
+        if (pokemon.Hp > 0 && grounded && side.Side.ToxicSpikes > 0)
         {
             if (HasType(pokemon, "독"))
             {
-                side.ToxicSpikes = 0;
+                side.Side.ToxicSpikes = 0;
                 LogSide(side, "{0} 발밑의 독압정이 사라졌다!");
             }
             else
-                TryInflict(side, side.ToxicSpikes == 1 ? Poison : BadPoison, announceFailure: false, fromOpponent: true);
+                TryInflict(side, side.Side.ToxicSpikes == 1 ? Poison : BadPoison, announceFailure: false, fromOpponent: true);
         }
-        if (pokemon.Hp > 0 && grounded && side.StickyWeb)
+        if (pokemon.Hp > 0 && grounded && side.Side.StickyWeb)
         {
             LogPokemon(side, $"{subject} 끈적끈적네트에 걸렸다!");
-            if (side.MistTurns > 0)
+            if (side.Side.MistTurns > 0)
                 LogPokemon(side, $"{subject} 흰안개에 보호되고 있다!");
             else
             {
@@ -164,7 +164,7 @@ partial class Battle
     }
 
     // 고속스핀: 맞히면 자신의 묶기를 풀고 우리 편 설치기를 없앤다.
-    private void RapidSpin(BattleSide side)
+    private void RapidSpin(BattleSlot side)
     {
         BattlePokemon user = side.Current;
         if (user.BoundBy != null)
@@ -182,16 +182,16 @@ partial class Battle
     }
 
     // 설치기를 모두 없앤다. 있었으면 true
-    private bool ClearHazards(BattleSide side)
+    private bool ClearHazards(BattleSlot side)
     {
-        bool any = side.Spikes > 0 || side.ToxicSpikes > 0 || side.StealthRock || side.StickyWeb;
-        side.Spikes = side.ToxicSpikes = 0;
-        side.StealthRock = side.StickyWeb = false;
+        bool any = side.Side.Spikes > 0 || side.Side.ToxicSpikes > 0 || side.Side.StealthRock || side.Side.StickyWeb;
+        side.Side.Spikes = side.Side.ToxicSpikes = 0;
+        side.Side.StealthRock = side.Side.StickyWeb = false;
         return any;
     }
 
     // 묶기 기술에 맞은 상대는 4~5턴 동안 턴 끝에 최대 HP의 1/8 데미지를 받고 교체할 수 없다.
-    private void Bind(BattleSide attacker, BattleSide defender, PokemonMoveInfo move)
+    private void Bind(BattleSlot attacker, BattleSlot defender, PokemonMoveInfo move)
     {
         BattlePokemon target = defender.Current;
         if (target.BoundBy != null)
@@ -203,15 +203,15 @@ partial class Battle
     }
 
     // 턴 끝: 묶기 데미지. 묶은 포켓몬이 교체되거나 쓰러졌으면 풀린다.
-    private void TickBinding(IEnumerable<BattleSide> sides)
+    private void TickBinding(IEnumerable<BattleSlot> sides)
     {
-        foreach (BattleSide side in sides)
+        foreach (BattleSlot side in sides)
         {
             BattlePokemon pokemon = side.Current;
             if (pokemon.Hp == 0 || pokemon.BoundBy is not BattlePokemon binder)
                 continue;
             string subject = WithJosa(pokemon.Info.Name, "은", "는");
-            if (!ReferenceEquals(binder, GetOther(side).Current) || binder.Hp == 0)
+            if (!ReferenceEquals(binder, DefaultTarget(side).Current) || binder.Hp == 0)
             {
                 pokemon.BoundBy = null;
                 continue;
@@ -230,22 +230,22 @@ partial class Battle
     }
 
     // 직접 교체할 수 없는지: 검은눈빛 등이나 묶기 기술을 쓴 상대가 나와 있는 동안. 고스트 타입은 교체할 수 있다(6세대).
-    public bool IsTrapped(BattleSide side, BattleSide other)
+    public bool IsTrapped(BattleSlot slot)
     {
-        BattlePokemon pokemon = side.Current, foe = other.Current;
-        return !HasType(pokemon, "고스트") && foe.Hp > 0 &&
-               (ReferenceEquals(pokemon.TrappedBy, foe) || ReferenceEquals(pokemon.BoundBy, foe));
+        BattlePokemon pokemon = slot.Current;
+        return !HasType(pokemon, "고스트") && OpposingSide(slot.Side).Slots.Any(foe => foe.Current.Hp > 0 &&
+               (ReferenceEquals(pokemon.TrappedBy, foe.Current) || ReferenceEquals(pokemon.BoundBy, foe.Current)));
     }
 
-    private bool HasBench(BattleSide side) =>
-        side.Team.Where((pokemon, index) => index != side.Active && pokemon.Hp > 0).Any();
+    private bool HasBench(BattleSlot side) =>
+        side.Side.Team.Where((pokemon, index) => index != side.Active && pokemon.Hp > 0).Any();
 
     // 울부짖기·날려버리기·드래곤테일·배대뒤치기: 상대의 남은 포켓몬 중 무작위로 끌어낸다.
     // 남은 포켓몬이 없거나 뿌리박기 중이면 실패한다. 끌려 나온 포켓몬은 이번 턴에 행동하지 않는다.
-    private bool ForceSwitch(BattleSide side)
+    private bool ForceSwitch(BattleSlot side)
     {
-        int[] bench = Enumerable.Range(0, side.Team.Length)
-            .Where(index => index != side.Active && side.Team[index].Hp > 0).ToArray();
+        int[] bench = Enumerable.Range(0, side.Side.Team.Length)
+            .Where(index => index != side.Active && side.Side.Team[index].Hp > 0).ToArray();
         if (bench.Length == 0 || side.Current.Ingrained)
             return false;
         ChangeActive(side, bench[Random.Next(bench.Length)]);
@@ -255,9 +255,9 @@ partial class Battle
     }
 
     // 턴 도중 교체를 시작한다: 교체할 포켓몬이 있고 상대가 아직 남아 있으면 다음 포켓몬을 고를 때까지 턴 처리를 멈춘다(ContinueTurn).
-    private bool StartMidTurnSwitch(BattleSide side, bool batonPass)
+    private bool StartMidTurnSwitch(BattleSlot side, bool batonPass)
     {
-        if (!HasBench(side) || !GetOther(side).Team.Any(pokemon => pokemon.Hp > 0))
+        if (!HasBench(side) || !DefaultTarget(side).Side.Team.Any(pokemon => pokemon.Hp > 0))
             return false;
         side.SwitchingMidTurn = true;
         side.BatonPassing = batonPass;
@@ -265,7 +265,7 @@ partial class Battle
     }
 
     // 턴 도중 교체를 끝내고 남은 턴을 이어서 처리한다. 배턴터치는 랭크·기충전·혼란·아쿠아링·뿌리박기·대타를 넘겨준다.
-    public TurnProgress CompleteMidTurnSwitch(BattleSide side, int index)
+    public TurnProgress CompleteMidTurnSwitch(BattleSlot side, int index)
     {
         BattlePokemon previous = side.Current;
         bool batonPass = side.BatonPassing;
@@ -304,7 +304,7 @@ partial class Battle
     }
 
     // 쓰러진 포켓몬 대신 다음 포켓몬을 내보낸다 (턴을 쓰지 않음).
-    public void SendInReplacement(BattleSide side, int index)
+    public void SendInReplacement(BattleSlot side, int index)
     {
         ChangeActive(side, index);
         side.MustSwitch = false;

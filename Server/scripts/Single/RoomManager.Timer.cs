@@ -60,23 +60,23 @@ partial class RoomManager
     private void ActionTimeout(GameRoom room)
     {
         Battle battle = room.Battle!;
-        BattleSide host = battle.HostSide, guest = battle.GuestSide;
+        BattleSlot host = battle.HostSide.Slots[0], guest = battle.GuestSide.Slots[0];   // 1:1은 편마다 자리 하나
         room.ActionDeadline = null;
 
         // 턴 도중 교체나 기절 후 교체를 기다리는 중이면 교체할 쪽만, 아니면 아직 고르지 않은 쪽이 늦은 것이다.
         bool midTurn = host.SwitchingMidTurn || guest.SwitchingMidTurn;
         bool forcedSwitch = !midTurn && (host.MustSwitch || guest.MustSwitch);
-        BattleSide[] late = new[] { host, guest }
+        BattleSlot[] late = new[] { host, guest }
             .Where(side => midTurn ? side.SwitchingMidTurn : forcedSwitch ? side.MustSwitch : !side.HasChosen).ToArray();
         if (late.Length == 0)
             return;
-        foreach (BattleSide side in late)
+        foreach (BattleSlot side in late)
         {
             if (midTurn || forcedSwitch)
             {
                 battle.Log(side, "시간 초과로 교체할 포켓몬을 자동 선택했다!", "상대가 시간 초과로 교체할 포켓몬을 자동 선택했다!");
-                int replacement = Enumerable.Range(0, side.Team.Length)
-                    .First(index => index != side.Active && side.Team[index].Hp > 0);
+                int replacement = Enumerable.Range(0, side.Side.Team.Length)
+                    .First(index => index != side.Active && side.Side.Team[index].Hp > 0);
                 if (midTurn)
                 {
                     Proceed(room, battle.CompleteMidTurnSwitch(side, replacement));
@@ -86,9 +86,8 @@ partial class RoomManager
             }
             else
             {
-                BattleSide other = battle.GetOther(side);
                 int[] available = Enumerable.Range(1, side.Current.Moves.Length)
-                    .Where(slot => battle.MoveBlockedBy(side, other, slot) == null).ToArray();
+                    .Where(slot => battle.MoveBlockedBy(side, slot) == null).ToArray();
                 side.Struggling = available.Length == 0;
                 int slot = side.Struggling ? 1 : available[battle.Random.Next(available.Length)];
                 side.ChosenMove = slot;

@@ -53,7 +53,7 @@ partial class Battle
         HitsHiddenMoveIds[hidden].Contains(move.Id) || (move.Id == ToxicMoveId && HasType(user, "독"));
 
     // 2턴 기술 첫 턴: 힘을 모으고(숨고), 다음 턴에 같은 기술로 자동으로 공격한다(LOCKED).
-    private void StartCharging(BattleSide side, PokemonMoveInfo move, int slot)
+    private void StartCharging(BattleSlot side, PokemonMoveInfo move, int slot)
     {
         BattlePokemon user = side.Current;
         var (message, hide) = TwoTurnMoves[move.Id];
@@ -72,7 +72,7 @@ partial class Battle
 
     // 프리폴 첫 턴: 상대를 데리고 하늘로 올라간다. 둘 다 공중에 숨고, 상대는 다음 턴에 떨어질 때까지 행동·교체할 수 없다.
     // 상대에게 대타가 있거나 200kg 이상이면 실패한다.
-    private void StartSkyDrop(BattleSide attacker, BattleSide defender, PokemonMoveInfo move, int slot)
+    private void StartSkyDrop(BattleSlot attacker, BattleSlot defender, PokemonMoveInfo move, int slot)
     {
         BattlePokemon user = attacker.Current, target = defender.Current;
         LogPokemon(attacker, $"{user.Info.Name}의 {move.Name}!");
@@ -95,7 +95,7 @@ partial class Battle
     }
 
     // 2턴 기술이 끝나거나(공격하는 턴) 취소되면(행동하지 못함) 숨은 상태를 풀고, 프리폴로 데려간 상대도 풀어 준다.
-    private void EndCharging(BattleSide attacker, BattleSide defender)
+    private void EndCharging(BattleSlot attacker, BattleSlot defender)
     {
         BattlePokemon user = attacker.Current;
         if (user.ChargingMove?.Id == SkyDropMoveId && defender.Current.SkyDropped)
@@ -111,9 +111,9 @@ partial class Battle
     // 턴 끝: 프리폴을 쓴 포켓몬이 쓰러지는 등으로 더 이상 붙잡고 있지 않으면 붙잡힌 포켓몬을 풀어 준다.
     private void ReleaseSkyDrop()
     {
-        foreach (BattleSide side in new[] { HostSide!, GuestSide! })
+        foreach (BattleSlot side in AllSlots)
         {
-            BattlePokemon holder = GetOther(side).Current;
+            BattlePokemon holder = DefaultTarget(side).Current;
             bool held = holder.Hp > 0 && holder.ChargingMove?.Id == SkyDropMoveId;
             if (side.Current.SkyDropped && !held)
             {
@@ -124,7 +124,7 @@ partial class Battle
     }
 
     // 숨은 상대를 노렸다가 빗나감
-    private void LogMissHidden(BattleSide attacker, PokemonMoveInfo move)
+    private void LogMissHidden(BattleSlot attacker, PokemonMoveInfo move)
     {
         string head = $"{attacker.Current.Info.Name}의 {move.Name}!";
         if (move.Category == "변화")
@@ -139,30 +139,30 @@ partial class Battle
 
     // 섀도다이브·고스트다이브·페인트·이차원홀·이차원러시: 상대의 방어(방어·판별·킹실드·니들가드·패스트가드·와이드가드·
     // 마룻바닥세워막기·트릭가드)를 뚫고 공격하며 그 턴의 방어를 없앤다.
-    private void BreakProtection(BattleSide defender, PokemonMoveInfo move)
+    private void BreakProtection(BattleSlot defender, PokemonMoveInfo move)
     {
         BattlePokemon target = defender.Current;
-        bool guarded = target.Protected || defender.QuickGuard || defender.WideGuard || defender.MatBlock || defender.CraftyShield;
+        bool guarded = target.Protected || defender.Side.QuickGuard || defender.Side.WideGuard || defender.Side.MatBlock || defender.Side.CraftyShield;
         if (!BreaksProtectMoveIds.Contains(move.Id) || !guarded)
             return;
         target.Protected = false;
         target.ProtectKind = null;
-        defender.QuickGuard = defender.WideGuard = defender.MatBlock = defender.CraftyShield = false;
+        defender.Side.QuickGuard = defender.Side.WideGuard = defender.Side.MatBlock = defender.Side.CraftyShield = false;
         LogPokemon(defender, $"{target.Info.Name}의 방어가 풀렸다!");
     }
 
     // 깨뜨리다: 공격하기 전에 상대 편의 리플렉터·빛의장막을 없앤다(효과가 없는 상대에게는 없애지 않는다).
-    private void BreakScreens(BattleSide defender, PokemonMoveInfo move)
+    private void BreakScreens(BattleSlot defender, PokemonMoveInfo move)
     {
-        if (move.Id != BrickBreakMoveId || defender.ReflectTurns + defender.LightScreenTurns == 0 ||
+        if (move.Id != BrickBreakMoveId || defender.Side.ReflectTurns + defender.Side.LightScreenTurns == 0 ||
             TypeMultiplier(move, defender.Current) == 0)
             return;
-        defender.ReflectTurns = defender.LightScreenTurns = 0;
+        defender.Side.ReflectTurns = defender.Side.LightScreenTurns = 0;
         LogSide(defender, "{0}의 리플렉터·빛의장막이 깨졌다!");
     }
 
     // 떨어뜨리기: 맞은 상대가 땅에 떨어진다(비행 타입·전자부유·텔레키네시스도 땅 기술을 맞음). 공중날기·뛰어오르기 중이면 취소된다.
-    private void SmackDown(BattleSide attacker, BattleSide defender)
+    private void SmackDown(BattleSlot attacker, BattleSlot defender)
     {
         BattlePokemon target = defender.Current;
         bool airborne = HasType(target, "비행") || target.MagnetRiseTurns > 0 || target.TelekinesisTurns > 0 ||
@@ -176,10 +176,10 @@ partial class Battle
     }
 
     // 소란피기: 쓰면 잠든 포켓몬이 모두 깨어나고, 맞히면 3턴 동안 이어서 쓴다(LOCKED). 그동안 아무도 잠들 수 없다.
-    private void Uproar(BattleSide side, bool landed, bool called, int slot)
+    private void Uproar(BattleSlot side, bool landed, bool called, int slot)
     {
         BattlePokemon user = side.Current;
-        foreach (BattleSide each in new[] { HostSide!, GuestSide! })
+        foreach (BattleSlot each in AllSlots)
         {
             if (each.Current.Hp > 0 && each.Current.Status == Sleep)
             {
@@ -199,10 +199,10 @@ partial class Battle
 
     // 소란 중인 포켓몬이 있으면 아무도 잠들 수 없다.
     private bool UproarActive() =>
-        HostSide!.Current.UproarTurns > 0 || GuestSide!.Current.UproarTurns > 0;
+        AllSlots.Any(slot => slot.Current.UproarTurns > 0);
 
     // 점프킥·무릎차기가 빗나가거나 막히면 최대 HP의 1/2만큼 반동을 받는다.
-    private void Crash(BattleSide side)
+    private void Crash(BattleSlot side)
     {
         BattlePokemon user = side.Current;
         int damage = Math.Max(1, user.MaxHp / 2);
@@ -211,7 +211,7 @@ partial class Battle
     }
 
     // 기습: 상대가 이번 턴에 아직 행동하지 않았고 공격 기술을 고른 경우에만 성공한다.
-    private bool WillAttack(BattleSide side)
+    private bool WillAttack(BattleSlot side)
     {
         BattlePokemon pokemon = side.Current;
         return side.ChosenMove is int slot && !pokemon.MovedThisTurn && pokemon.RechargeSlot == null &&
@@ -224,7 +224,7 @@ partial class Battle
 
     // 미래예지·파멸의소원: 2턴 뒤 턴이 끝날 때 그 자리의 포켓몬이 맞는다. 이미 예약돼 있으면 실패한다.
     // 방어로 막을 수 없다.
-    private void UseFutureAttack(BattleSide attacker, BattleSide defender, PokemonMoveInfo move)
+    private void UseFutureAttack(BattleSlot attacker, BattleSlot defender, PokemonMoveInfo move)
     {
         BattlePokemon user = attacker.Current;
         string subject = WithJosa(user.Info.Name, "은", "는");
@@ -244,7 +244,7 @@ partial class Battle
     // 쓰러졌어도 그 포켓몬의 능력치로 계산한다.
     private void TickFutureAttacks()
     {
-        foreach (BattleSide side in new[] { HostSide!, GuestSide! })
+        foreach (BattleSlot side in AllSlots)
         {
             if (side.FutureAttackTurns == 0 || --side.FutureAttackTurns > 0)
                 continue;
@@ -255,7 +255,7 @@ partial class Battle
             if (target.Hp == 0)
                 continue;
 
-            BattleSide userSide = GetOther(side);
+            BattleSlot userSide = DefaultTarget(side);
             var result = CalculateDamage(userSide, side, move, user: user);
             bool hit = result.Hit && result.Effectiveness > 0;
             SendMoveEffect(userSide, move, hit ? result.Effectiveness : 0);
@@ -284,7 +284,7 @@ partial class Battle
     // 공격 한 번을 맞힌다. 대타가 있으면 대타가 대신 맞고(소리 기술·이차원홀 등은 대타를 무시, 6세대),
     // 버티기 중이면 HP 1로 버틴다. 칼등치기는 HP를 1 남긴다. 분노 중이면 맞을 때마다 공격 +1
     // 쓰러졌을 때의 처리(Faint)는 부른 쪽에서 한다. Dealt: 대타를 포함해 실제로 준 데미지, Body: 포켓몬 본체에 맞았는지
-    private (int Dealt, bool Body, bool Endured) ApplyHit(BattleSide defender,
+    private (int Dealt, bool Body, bool Endured) ApplyHit(BattleSlot defender,
         PokemonMoveInfo move, int damage)
     {
         BattlePokemon target = defender.Current;

@@ -40,20 +40,20 @@ partial class Battle
 
     // 방어 계열로 막히는지: 방어·판별·니들가드(모두), 킹실드(공격 기술만), 패스트가드(우선도가 높은 기술),
     // 와이드가드(여러 대상을 노리는 공격), 마룻바닥세워막기(공격 기술), 트릭가드(변화 기술)
-    private bool IsProtectedFrom(BattleSide defender, PokemonMoveInfo move)
+    private bool IsProtectedFrom(BattleSlot defender, PokemonMoveInfo move)
     {
         BattlePokemon target = defender.Current;
         bool status = move.Category == "변화";
         string? spread = data.MoveMetaById.GetValueOrDefault(move.Id)?.Target;
         return (target.Protected && !(target.ProtectKind == "kings" && status)) ||
-               (defender.QuickGuard && move.Priority > 0) ||
-               (defender.WideGuard && !status && spread is "all-other-pokemon" or "all-opponents") ||
-               (defender.MatBlock && !status) ||
-               (defender.CraftyShield && status);
+               (defender.Side.QuickGuard && move.Priority > 0) ||
+               (defender.Side.WideGuard && !status && spread is "all-other-pokemon" or "all-opponents") ||
+               (defender.Side.MatBlock && !status) ||
+               (defender.Side.CraftyShield && status);
     }
 
     // 킹실드·니들가드로 막은 기술이 접촉 기술이면: 킹실드는 공격 -2, 니들가드는 최대 HP의 1/8 데미지
-    private void ProtectContactEffect(BattleSide attacker, BattleSide defender, PokemonMoveInfo move)
+    private void ProtectContactEffect(BattleSlot attacker, BattleSlot defender, PokemonMoveInfo move)
     {
         BattlePokemon user = attacker.Current, target = defender.Current;
         if (!target.Protected || !HasFlag(move, "contact"))
@@ -72,7 +72,7 @@ partial class Battle
         }
     }
 
-    private void UseProtectMove(BattleSide side, PokemonMoveInfo move, bool movesLast)
+    private void UseProtectMove(BattleSlot side, PokemonMoveInfo move, bool movesLast)
     {
         BattlePokemon user = side.Current;
         string subject = WithJosa(user.Info.Name, "은", "는");
@@ -104,12 +104,12 @@ partial class Battle
                 }
                 else if (move.Id == QuickGuardMoveId)
                 {
-                    side.QuickGuard = true;
+                    side.Side.QuickGuard = true;
                     LogSide(side, "{0}이 패스트가드로 보호받고 있다!");
                 }
                 else if (move.Id == WideGuardMoveId)
                 {
-                    side.WideGuard = true;
+                    side.Side.WideGuard = true;
                     LogSide(side, "{0}이 와이드가드로 보호받고 있다!");
                 }
                 else
@@ -128,7 +128,7 @@ partial class Battle
                     LogBoth(side, "하지만 실패했다!");
                     return;
                 }
-                side.MatBlock = true;
+                side.Side.MatBlock = true;
                 LogPokemon(side, $"{subject} 다다미를 세워 공격을 막으려 한다!");
                 break;
 
@@ -139,7 +139,7 @@ partial class Battle
                     LogBoth(side, "하지만 실패했다!");
                     return;
                 }
-                side.CraftyShield = true;
+                side.Side.CraftyShield = true;
                 LogSide(side, "{0}이 트릭가드로 보호받고 있다!");
                 break;
 
@@ -168,14 +168,14 @@ partial class Battle
                 break;
 
             case SafeguardMoveId:
-                StartSideEffect(side, side.SafeguardTurns, 5, value => side.SafeguardTurns = value,
+                StartSideEffect(side, side.Side.SafeguardTurns, 5, value => side.Side.SafeguardTurns = value,
                     "{0}이 신비의 베일에 둘러싸였다!");
                 break;
         }
     }
 
     // 대타가 있으면 대타가 데미지를 대신 받는다. 대타가 받았으면 true (이때 추가 효과는 없다)
-    private bool HitSubstitute(BattleSide defender, int damage)
+    private bool HitSubstitute(BattleSlot defender, int damage)
     {
         BattlePokemon target = defender.Current;
         if (target.SubstituteHp == 0)
@@ -191,9 +191,9 @@ partial class Battle
     // 이번 턴에 방어 계열을 쓰지 않았으면 연속 횟수도 처음으로 돌린다.
     private void ClearTurnProtection()
     {
-        foreach (BattleSide side in new[] { HostSide!, GuestSide! })
+        foreach (BattleSlot side in AllSlots)
         {
-            side.QuickGuard = side.WideGuard = side.MatBlock = side.CraftyShield = false;
+            side.Side.QuickGuard = side.Side.WideGuard = side.Side.MatBlock = side.Side.CraftyShield = false;
             BattlePokemon pokemon = side.Current;
             pokemon.Protected = pokemon.Enduring = pokemon.MagicCoat = pokemon.Flinched = false;
             pokemon.ProtectKind = null;

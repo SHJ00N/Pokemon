@@ -15,7 +15,7 @@ partial class Battle
     private static readonly HashSet<int> HealMoveIds =
         [.. HalfHealMoveIds, PainSplitMoveId, SwallowMoveId, WishMoveId, IngrainMoveId, AquaRingMoveId];
 
-    private void UseHealMove(BattleSide attacker, BattleSide defender, PokemonMoveInfo move)
+    private void UseHealMove(BattleSlot attacker, BattleSlot defender, PokemonMoveInfo move)
     {
         BattlePokemon user = attacker.Current, target = defender.Current;
         string subject = WithJosa(user.Info.Name, "은", "는");
@@ -90,7 +90,7 @@ partial class Battle
     }
 
     // HP를 회복하고 기록을 남긴다. 이미 가득 차 있으면 false.
-    private bool Heal(BattleSide side, int amount, string? source = null)
+    private bool Heal(BattleSlot side, int amount, string? source = null)
     {
         BattlePokemon pokemon = side.Current;
         // 회복봉인 중에는 HP가 회복되지 않는다.
@@ -104,16 +104,16 @@ partial class Battle
         return true;
     }
 
-    private void SendHealEffect(BattleSide side)
+    private void SendHealEffect(BattleSlot side)
     {
-        Send(side, "BATTLE_HEAL SELF");
-        Send(GetOther(side), "BATTLE_HEAL OPPONENT");
+        Send(side.Side, "BATTLE_HEAL SELF");
+        Send(DefaultTarget(side).Side, "BATTLE_HEAL OPPONENT");
     }
 
     // 턴 끝 회복: 희망사항 → 아쿠아링 → 뿌리박기 (독·화상 데미지보다 먼저)
-    private void EndOfTurnHealing(IEnumerable<BattleSide> sides)
+    private void EndOfTurnHealing(IEnumerable<BattleSlot> sides)
     {
-        foreach (BattleSide side in sides)
+        foreach (BattleSlot side in sides)
         {
             if (side.WishTurns > 0 && --side.WishTurns == 0)
             {
@@ -121,10 +121,10 @@ partial class Battle
                 Heal(side, side.WishHeal);
             }
         }
-        foreach (BattleSide side in sides)
+        foreach (BattleSlot side in sides)
             if (side.Current.AquaRing)
                 Heal(side, side.Current.MaxHp / 16);
-        foreach (BattleSide side in sides)
+        foreach (BattleSlot side in sides)
             if (side.Current.Ingrained)
                 Heal(side, side.Current.MaxHp / 16, "뿌리박기");
     }

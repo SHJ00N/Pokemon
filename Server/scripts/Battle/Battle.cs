@@ -23,7 +23,7 @@ sealed partial class Battle
     public int FairyLockTurns { get; set; }     // 페어리록: 교체할 수 없다.
     public bool IonDeluge { get; set; }         // 플라스마샤워: 이번 턴에 노말 기술이 전기 타입이 된다.
     // 이번 턴에 아직 기술을 쓰지 않은 쪽 (행동 순서). 턴 도중 교체를 기다리는 동안 남아 있다가 이어서 처리한다.
-    public List<BattleSide> TurnQueue { get; } = new();
+    public List<BattleSlot> TurnQueue { get; } = new();
     public int TurnNumber { get; set; }         // 전투 시작부터 센 턴 번호
     public int LastMoveIdThisTurn { get; set; } // 이번 턴에 마지막으로 성공한 기술 (크로스플레임·크로스썬더)
     public PokemonMoveInfo? LastExecutedMove { get; set; }  // 전투에서 마지막으로 나온 기술 (흉내쟁이)
@@ -48,17 +48,17 @@ sealed partial class Battle
     // 새 턴을 시작한다. 난동 기술·2턴 기술의 공격 턴·반동으로 쉬는 턴인 포켓몬은 행동을 자동으로 정한다(LOCKED).
     public void BeginTurn()
     {
-        if (HostSide.MustSwitch || GuestSide.MustSwitch)
+        if (AllSlots.Any(slot => slot.MustSwitch))
             return;
-        foreach (BattleSide side in new[] { HostSide, GuestSide })
+        foreach (BattleSlot slot in AllSlots)
         {
-            BattlePokemon pokemon = side.Current;
-            if ((pokemon.LockedSlot ?? pokemon.ChargingSlot ?? pokemon.RechargeSlot) is int slot)
-                side.ChosenMove = slot;
+            BattlePokemon pokemon = slot.Current;
+            if ((pokemon.LockedSlot ?? pokemon.ChargingSlot ?? pokemon.RechargeSlot) is int moveSlot)
+                slot.ChosenMove = moveSlot;
         }
     }
 
-    public bool AllChosen => HostSide.HasChosen && GuestSide.HasChosen;
+    public bool AllChosen => AllSlots.All(slot => slot.HasChosen);
 
     // 한쪽(또는 양쪽)의 포켓몬이 모두 쓰러졌으면 승패를 정한다.
     // 턴 끝 데미지 등으로 양쪽 마지막 포켓몬이 함께 쓰러지면 무승부다.
@@ -72,7 +72,7 @@ sealed partial class Battle
         return TurnProgress.Over;
     }
 
-    private void ApplyChosenMegaEvolution(BattleSide side)
+    private void ApplyChosenMegaEvolution(BattleSlot side)
     {
         if (side.ChosenMegaForm is not PokemonInfo form || !GetMegaForms(side).Contains(form))
             return;
@@ -80,40 +80,43 @@ sealed partial class Battle
         side.ChosenMegaForm = null;
         string name = side.Current.Info.Name;
         side.Current.MegaEvolve(form);
-        side.Players[0].HasMegaEvolved = true;   // 1:1은 편마다 플레이어 한 명
+        side.Owner.HasMegaEvolved = true;   // 메가진화는 플레이어마다 한 번
         SendBattleState(megaEvolved: side);
         LogPokemon(side, $"{WithJosa(name, "이", "가")} {WithJosa(form.Name, "으로", "로")} 메가진화했다!");
     }
 
-    public IReadOnlyList<PokemonInfo> GetMegaForms(BattleSide side)
+    public IReadOnlyList<PokemonInfo> GetMegaForms(BattleSlot side)
     {
         BattlePokemon pokemon = side.Current;
         // 레쿠쟈는 화룡점정을 알고 있어야 메가진화한다(6세대 ORAS).
         bool knowsRequiredMove = !data.MegaRequiredMoveByBaseId.TryGetValue(pokemon.Info.Id, out int requiredMove) ||
             pokemon.Moves.Any(slot => slot.Move.Id == requiredMove);
-        return !side.Players[0].HasMegaEvolved && pokemon.Hp > 0 && !pokemon.Transformed && knowsRequiredMove
+        return !side.Owner.HasMegaEvolved && pokemon.Hp > 0 && !pokemon.Transformed && knowsRequiredMove
             ? data.MegaFormsByBaseId.GetValueOrDefault(pokemon.Info.Id) ?? [] : [];
     }
 
     // 양쪽이 모두 행동을 고른 뒤(AllChosen) 한 턴을 처리한다. 교체 → 공격(우선도, 스피드 순) → 턴 끝 처리 순서다.
     public TurnProgress ResolveTurn()
     {
-        BattleSide host = HostSide, guest = GuestSide;
+        BattleSlot[] slots = AllSlots.ToArray();
         TurnNumber++;
         LastMoveIdThisTurn = 0;
-        foreach (BattleSide side in new[] { host, guest })
+        foreach (BattleSide team in new[] { HostSide, GuestSide })
         {
-            side.FaintedLastTurn = side.FaintedThisTurn;
-            side.FaintedThisTurn = false;
+            team.FaintedLastTurn = team.FaintedThisTurn;
+            team.FaintedThisTurn = false;
+        }
+        foreach (BattleSlot side in slots)
+        {
             side.TurnActor = side.Current;
             side.Current.ClearTurnRecord();
         }
 
         // 따라가때리기: 상대가 교체하려고 하면 교체하기 전에 위력 2배로 공격한다. 쓰러지면 교체하지 않고 턴 끝에 다시 고른다.
-        var pursued = new HashSet<BattleSide>();
-        foreach (BattleSide side in new[] { host, guest })
+        var pursued = new HashSet<BattleSlot>();
+        foreach (BattleSlot side in slots)
         {
-            BattleSide pursuer = GetOther(side);
+            BattleSlot pursuer = DefaultTarget(side);
             if (side.ChosenSwitch == null || pursuer.ChosenMove is not int slot || pursuer.Struggling ||
                 pursuer.Current.Moves[slot - 1].Move.Id != PursuitMoveId || pursuer.Current.RechargeSlot != null)
                 continue;
@@ -127,7 +130,7 @@ sealed partial class Battle
                 side.ChosenSwitch = null;
         }
 
-        foreach (BattleSide side in new[] { host, guest })
+        foreach (BattleSlot side in slots)
         {
             if (side.ChosenSwitch is not int index)
                 continue;
@@ -141,17 +144,17 @@ sealed partial class Battle
         }
 
         // 우선도가 높은 기술 → 스피드가 빠른 포켓몬(트릭룸이면 느린 포켓몬) → 같으면 무작위
-        List<BattleSide> attackers = new[] { host, guest }
+        List<BattleSlot> attackers = slots
             .Where(side => side.ChosenMove != null && !pursued.Contains(side))
             .OrderByDescending(side => side.Struggling ? 0 : side.Current.Moves[side.ChosenMove!.Value - 1].Move.Priority)
             .ThenByDescending(side => TrickRoomTurns > 0 ? -GetSpeed(side) : GetSpeed(side))
             .ThenBy(_ => Random.Next())
             .ToList();
 
-        foreach (BattleSide side in new[] { host, guest })
+        foreach (BattleSlot side in slots)
             side.TurnActor = side.Current;     // 교체해서 나온 포켓몬 (이번 턴의 기록은 교체할 때 지워졌다)
         // 힘껏펀치: 턴이 시작될 때 기합을 모은다. 기술을 쓰기 전에 공격을 맞으면 실패한다.
-        foreach (BattleSide side in attackers)
+        foreach (BattleSlot side in attackers)
         {
             BattlePokemon pokemon = side.Current;
             if (!side.Struggling && pokemon.Moves[side.ChosenMove!.Value - 1].Move.Id == FocusPunchMoveId &&
@@ -161,7 +164,7 @@ sealed partial class Battle
 
         // 메가진화 (6세대): 교체가 끝난 뒤, 어느 기술보다도 먼저 빠른 포켓몬부터 메가진화한다.
         // 그래서 상대가 먼저 공격해도 메가진화한 모습으로 맞는다. 행동 순서는 위에서 메가진화 전 스피드로 이미 정했다.
-        foreach (BattleSide side in new[] { host, guest }
+        foreach (BattleSlot side in slots
                      .OrderByDescending(side => TrickRoomTurns > 0 ? -GetSpeed(side) : GetSpeed(side)).ToArray())
             ApplyChosenMegaEvolution(side);
 
@@ -174,15 +177,14 @@ sealed partial class Battle
     // 그 자리에서 멈추고(AwaitingMidTurnSwitch), 고르면 CompleteMidTurnSwitch가 다시 부른다.
     private TurnProgress ContinueTurn()
     {
-        BattleSide host = HostSide, guest = GuestSide;
         while (TurnQueue.Count > 0)
         {
-            BattleSide side = TurnQueue[0];
+            BattleSlot side = TurnQueue[0];
             TurnQueue.RemoveAt(0);
             // 드래곤테일 등으로 강제 교체되어 나온 포켓몬은 이번 턴에 행동하지 않는다.
             if (!ReferenceEquals(side.Current, side.TurnActor))
                 continue;
-            ExecuteMove(side, GetOther(side), movesLast: TurnQueue.Count == 0);
+            ExecuteMove(side, DefaultTarget(side), movesLast: TurnQueue.Count == 0);
             // 각 공격의 HP·상태·능력치 결과를 다음 공격 효과보다 먼저 보낸다.
             SendBattleState();
             if (side.SwitchingMidTurn)
@@ -191,19 +193,23 @@ sealed partial class Battle
 
         EndOfTurn();
 
-        host.ChosenMove = guest.ChosenMove = null;
-        host.ChosenMegaForm = guest.ChosenMegaForm = null;
-        host.ChosenSwitch = guest.ChosenSwitch = null;
-        host.Struggling = guest.Struggling = false;
+        foreach (BattleSlot slot in AllSlots)
+        {
+            slot.ChosenMove = null;
+            slot.ChosenMegaForm = null;
+            slot.ChosenSwitch = null;
+            slot.Struggling = false;
+        }
         SendBattleState();
         return CheckEnd();
     }
 
     // 출전 포켓몬을 바꾼다. 나가는 포켓몬의 일시 상태와, 그 포켓몬 때문에 걸린 상대의 헤롱헤롱이 풀린다.
-    private void ChangeActive(BattleSide side, int index)
+    private void ChangeActive(BattleSlot side, int index)
     {
         side.Current.OnSwitchOut();
-        GetOther(side).Current.Infatuated = false;
+        foreach (BattleSlot opponent in OpposingSide(side.Side).Slots)
+            opponent.Current.Infatuated = false;
         side.Active = index;
         side.Current.OnSwitchIn();
     }
@@ -212,7 +218,7 @@ sealed partial class Battle
     // hit: 연속기의 몇 번째 타격인지. 명중 판정은 첫 타에서만 하고, 트리플킥은 매번 판정하며 위력이 10·20·30으로 오른다.
     // user: 공격하는 포켓몬 (미래예지처럼 지금 나와 있지 않은 포켓몬의 공격일 때만 준다)
     private (bool Supported, bool Hit, int Damage, double Effectiveness, bool Critical) CalculateDamage(
-        BattleSide attackerSide, BattleSide defenderSide, PokemonMoveInfo move, int hit = 1, BattlePokemon? user = null)
+        BattleSlot attackerSide, BattleSlot defenderSide, PokemonMoveInfo move, int hit = 1, BattlePokemon? user = null)
     {
         BattlePokemon attacker = user ?? attackerSide.Current, defender = defenderSide.Current;
         // 변화 기술은 데미지가 없다.
@@ -287,7 +293,7 @@ sealed partial class Battle
         damage = (int)(damage * FieldPowerModifier(attacker, defender, move));   // 날씨·필드·흙놀이·물놀이
         if (physical && attacker.Status == Burn && move.Id != FacadeMoveId)
             damage /= 2;                                      // 화상이면 물리 기술 데미지 절반 (객기는 그대로, 6세대)
-        if (!critical && (physical ? defenderSide.ReflectTurns : defenderSide.LightScreenTurns) > 0)
+        if (!critical && (physical ? defenderSide.Side.ReflectTurns : defenderSide.Side.LightScreenTurns) > 0)
             damage /= 2;                                      // 리플렉터·빛의장막 (급소면 무시)
         if (critical)
             damage = damage * 3 / 2;                          // 급소 1.5배 (6세대)
@@ -323,13 +329,18 @@ sealed partial class Battle
         return word + (hasFinal ? afterFinal : afterVowel);
     }
 
-    // 같은 사건을 행동한 플레이어와 상대에게 각자의 시점으로 보낸다.
-    public void Log(BattleSide actor, string mine, string theirs)
+    // 같은 사건을 행동한 편과 상대 편에게 각자의 시점으로 보낸다.
+    public void Log(BattleSlot actor, string mine, string theirs)
     {
-        Send(actor, "BATTLE_LOG " + mine);
-        Send(GetOther(actor), "BATTLE_LOG " + theirs);
+        Send(actor.Side, "BATTLE_LOG " + mine);
+        Send(OpposingSide(actor.Side), "BATTLE_LOG " + theirs);
     }
 
-    public BattleSide GetOther(BattleSide side) =>
-        side == HostSide ? GuestSide : HostSide;
+    // 양쪽 편의 모든 출전 자리 (방장 편 먼저)
+    public IEnumerable<BattleSlot> AllSlots => HostSide.Slots.Concat(GuestSide.Slots);
+
+    public BattleSide OpposingSide(BattleSide side) => side == HostSide ? GuestSide : HostSide;
+
+    // 대상을 고르지 않는 1:1에서 기술이 향하는 자리: 상대 편의 첫 자리
+    public BattleSlot DefaultTarget(BattleSlot user) => OpposingSide(user.Side).Slots[0];
 }

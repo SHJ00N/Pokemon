@@ -18,7 +18,7 @@ partial class RoomManager
     {
         lock (roomsLock)
         {
-            if (!TryGetBattle(session, out GameRoom room, out Battle battle, out BattleSide me, out BattleSide other) ||
+            if (!TryGetBattle(session, out GameRoom room, out Battle battle, out BattleSlot me, out BattleSlot other) ||
                 room.BattleOver || me.MustSwitch || other.MustSwitch || me.HasChosen ||
                 me.SwitchingMidTurn || other.SwitchingMidTurn)
             {
@@ -52,9 +52,9 @@ partial class RoomManager
             // PP가 부족하거나 효과로 막힌 기술은 고를 수 없다.
             // 쓸 수 있는 기술이 하나도 없으면 어느 기술을 골라도 발버둥을 쓴다.
             me.Struggling = false;
-            if (battle.MoveBlockedBy(me, other, slot) is string cause)
+            if (battle.MoveBlockedBy(me, slot) is string cause)
             {
-                if (!battle.MustStruggle(me, other))
+                if (!battle.MustStruggle(me))
                 {
                     session.QueueMessage($"ERROR {cause} 때문에 {Battle.WithJosa(me.Current.Moves[slot - 1].Move.Name, "을", "를")} 쓸 수 없습니다.");
                     return;
@@ -74,7 +74,7 @@ partial class RoomManager
     {
         lock (roomsLock)
         {
-            if (!TryGetBattle(session, out GameRoom room, out Battle battle, out BattleSide me, out BattleSide other) ||
+            if (!TryGetBattle(session, out GameRoom room, out Battle battle, out BattleSlot me, out BattleSlot other) ||
                 room.BattleOver)
             {
                 session.QueueMessage("ERROR 지금은 교체할 수 없습니다.");
@@ -82,7 +82,7 @@ partial class RoomManager
             }
 
             int index = teamSlot - 1;
-            if (index == me.Active || me.Team[index].Hp == 0)
+            if (index == me.Active || me.Side.Team[index].Hp == 0)
             {
                 session.QueueMessage("ERROR 교체할 수 없는 포켓몬입니다.");
                 return;
@@ -129,7 +129,7 @@ partial class RoomManager
                 session.QueueMessage("ERROR 페어리록 때문에 이번 턴에는 교체할 수 없습니다.");
                 return;
             }
-            if (battle.IsTrapped(me, other))
+            if (battle.IsTrapped(me))
             {
                 session.QueueMessage("ERROR 상대에게 붙잡혀 있어서 교체할 수 없습니다.");
                 return;
@@ -146,15 +146,15 @@ partial class RoomManager
     {
         lock (roomsLock)
         {
-            if (!TryGetBattle(session, out GameRoom room, out Battle battle, out BattleSide me, out BattleSide other) || room.BattleOver)
+            if (!TryGetBattle(session, out GameRoom room, out Battle battle, out BattleSlot me, out BattleSlot other) || room.BattleOver)
             {
                 session.QueueMessage("ERROR 지금은 항복할 수 없습니다.");
                 return;
             }
 
             room.BattleOver = true;
-            battle.Send(me, "BATTLE_END LOSE SURRENDER");
-            battle.Send(other, "BATTLE_END WIN SURRENDER");
+            battle.Send(me.Side, "BATTLE_END LOSE SURRENDER");
+            battle.Send(other.Side, "BATTLE_END WIN SURRENDER");
             Console.WriteLine($"방 {room.Id} 전투 종료 (항복: {session.Nickname})");
         }
     }
@@ -245,10 +245,10 @@ partial class RoomManager
     // LOCKED: 난동 기술·2턴 기술의 공격 턴·반동으로 쉬는 턴이라 행동이 정해져 있어 선택 없이 대기
     private static void SendPrompts(Battle battle)
     {
-        foreach (BattleSide side in new[] { battle.HostSide, battle.GuestSide })
+        foreach (BattleSlot side in battle.AllSlots)
         {
-            BattleSide other = battle.GetOther(side);
-            battle.Send(side, side.SwitchingMidTurn ? "CHOOSE_SWITCH_MIDTURN"
+            BattleSlot other = battle.DefaultTarget(side);
+            battle.Send(side.Side, side.SwitchingMidTurn ? "CHOOSE_SWITCH_MIDTURN"
                 : other.SwitchingMidTurn ? "WAIT_SWITCH"
                 : side.MustSwitch ? "CHOOSE_SWITCH"
                 : other.MustSwitch ? "WAIT_SWITCH"
@@ -257,7 +257,7 @@ partial class RoomManager
     }
 
     // roomsLock 안에서 호출한다. 전투가 시작된 방만 찾는다.
-    private bool TryGetBattle(ClientSession session, out GameRoom room, out Battle battle, out BattleSide me, out BattleSide other)
+    private bool TryGetBattle(ClientSession session, out GameRoom room, out Battle battle, out BattleSlot me, out BattleSlot other)
     {
         room = null!;
         battle = null!;
@@ -268,8 +268,9 @@ partial class RoomManager
 
         room = found;
         battle = current;
-        (me, other) = current.HostSide.Players[0].Session == session
-            ? (current.HostSide, current.GuestSide) : (current.GuestSide, current.HostSide);
+        // 1:1은 편마다 자리 하나
+        BattleSlot host = current.HostSide.Slots[0], guest = current.GuestSide.Slots[0];
+        (me, other) = host.Owner.Session == session ? (host, guest) : (guest, host);
         return true;
     }
 }

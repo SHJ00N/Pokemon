@@ -28,7 +28,7 @@ partial class Battle
 
     // 기술의 위력. 조건에 따라 바뀌는 위력과 위력 값이 DB에 없는 기술의 위력을 계산한다. 위력이 없으면 null
     // hit: 연속기의 몇 번째 타격인지 (집단구타)
-    private int? BasePower(BattleSide attackerSide, BattleSide defenderSide, BattlePokemon attacker,
+    private int? BasePower(BattleSlot attackerSide, BattleSlot defenderSide, BattlePokemon attacker,
         PokemonMoveInfo move, int hit)
     {
         BattlePokemon defender = defenderSide.Current;
@@ -87,7 +87,7 @@ partial class Battle
             BrineMoveId => defender.Hp * 2 <= defender.MaxHp,               // 상대 HP가 절반 이하
             PaybackMoveId => defender.MovedThisTurn,                        // 상대가 먼저 행동했으면
             AssuranceMoveId => defender.HurtThisTurn,                       // 상대가 이번 턴에 이미 데미지를 입었으면
-            RetaliateMoveId => attackerSide.FaintedLastTurn,                // 지난 턴에 우리 편이 쓰러졌으면
+            RetaliateMoveId => attackerSide.Side.FaintedLastTurn,                // 지난 턴에 우리 편이 쓰러졌으면
             PursuitMoveId => defender.SwitchingOut,                         // 상대가 교체하려고 하면
             AcrobaticsMoveId => true,                                       // 지닌 도구가 없으면 (이 게임은 항상)
             FusionFlareMoveId => LastMoveIdThisTurn == FusionBoltMoveId, // 이번 턴 바로 앞에 크로스썬더가 나왔으면
@@ -116,7 +116,7 @@ partial class Battle
     };
 
     // 위력·데미지를 계산하기 전에 실패하는 경우
-    private bool PowerMoveFails(BattleSide attackerSide, BattlePokemon attacker, BattlePokemon defender,
+    private bool PowerMoveFails(BattleSlot attackerSide, BattlePokemon attacker, BattlePokemon defender,
         PokemonMoveInfo move) => move.Id switch
     {
         EndeavorMoveId => defender.Hp <= attacker.Hp,
@@ -129,8 +129,8 @@ partial class Battle
     };
 
     // 집단구타에 참여하는 포켓몬: 쓰러지지 않고 상태이상이 없는 우리 팀 포켓몬 (자신 포함). 한 마리당 한 번 때린다.
-    private BattlePokemon[] BeatUpMembers(BattleSide side) =>
-        side.Team.Where(pokemon => pokemon.Hp > 0 && pokemon.Status == null).ToArray();
+    private BattlePokemon[] BeatUpMembers(BattleSlot side) =>
+        side.Side.Team.Where(pokemon => pokemon.Hp > 0 && pokemon.Status == null).ToArray();
 
     // 매그니튜드: 4(5%) 10, 5(10%) 30, 6(20%) 50, 7(30%) 70, 8(20%) 90, 9(10%) 110, 10(5%) 150
     private void RollMagnitude(BattlePokemon user)
@@ -144,7 +144,7 @@ partial class Battle
 
     // 프레젠트: 40% 위력 40, 30% 위력 80, 10% 위력 120, 20%는 상대의 HP를 최대 HP의 1/4 회복시킨다.
     // 회복이면 처리하고 false를 돌려준다.
-    private bool RollPresent(BattleSide attacker, BattleSide defender, PokemonMoveInfo move)
+    private bool RollPresent(BattleSlot attacker, BattleSlot defender, PokemonMoveInfo move)
     {
         BattlePokemon user = attacker.Current, target = defender.Current;
         int roll = Random.Next(100);
@@ -161,7 +161,7 @@ partial class Battle
 
     // 참기: 2턴 동안 받은 데미지를 모았다가 3번째 턴에 2배로 돌려준다. 참는 동안은 행동이 정해진다(LOCKED).
     // 돌려줄 차례면 true (이어서 공격으로 처리한다)
-    private bool UseBide(BattleSide side, PokemonMoveInfo move, int slot)
+    private bool UseBide(BattleSlot side, PokemonMoveInfo move, int slot)
     {
         BattlePokemon user = side.Current;
         string subject = WithJosa(user.Info.Name, "은", "는");
@@ -190,7 +190,7 @@ partial class Battle
 
     // 정신차리기·잠깨움뺨치기: 맞은 상대의 마비·잠듦을 고친다. 비밀의힘: 30% 확률로 필드에 따라 마비(필드 없음·일렉트릭필드)
     // ·잠듦(그래스필드)·특수공격 -1(미스트필드)
-    private void ApplyPowerMoveEffects(BattleSide attacker, BattleSide defender, PokemonMoveInfo move)
+    private void ApplyPowerMoveEffects(BattleSlot attacker, BattleSlot defender, PokemonMoveInfo move)
     {
         BattlePokemon target = defender.Current;
         if (move.Id == SmellingSaltsMoveId && target.Status == Paralysis)
@@ -207,7 +207,7 @@ partial class Battle
         {
             if (Terrain == MistyTerrain)
             {
-                if (defender.MistTurns == 0)
+                if (defender.Side.MistTurns == 0)
                     ChangeStage(defender, Stat.SpAttack, -1, announceFailure: false);
             }
             else

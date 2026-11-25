@@ -51,12 +51,12 @@ partial class Battle
     private double AccuracyMultiplier(int stage) => stage >= 0 ? (3 + stage) / 3.0 : 3.0 / (3 - stage);
 
     // 행동 순서에 쓰는 스피드: 랭크, 마비(1/4), 순풍(2배)을 반영한다.
-    private int GetSpeed(BattleSide side)
+    private int GetSpeed(BattleSlot side)
     {
         BattlePokemon pokemon = side.Current;
         double speed = pokemon.Speed * StageMultiplier(pokemon.GetStage(Stat.Speed));
         if (pokemon.Status == Paralysis) speed /= 4;
-        if (side.TailwindTurns > 0) speed *= 2;
+        if (side.Side.TailwindTurns > 0) speed *= 2;
         return (int)speed;
     }
 
@@ -80,16 +80,16 @@ partial class Battle
     // 급소 판정 (6세대): 급소 랭크 0 → 1/16, 1 → 1/8, 2 → 1/2, 3 이상 → 반드시.
     // 급소 랭크 = 기충전(+2) + 급소에 잘 맞는 기술(DB의 crit_rate, 업어후리기·얼음숨결은 6이라 반드시 급소).
     // 상대 편에 주술이 걸려 있으면 급소에 맞지 않는다.
-    private bool RollCritical(BattlePokemon attacker, BattleSide defender, int moveCritRate)
+    private bool RollCritical(BattlePokemon attacker, BattleSlot defender, int moveCritRate)
     {
-        if (defender.LuckyChantTurns > 0)
+        if (defender.Side.LuckyChantTurns > 0)
             return false;
         int stage = (attacker.FocusEnergy ? 2 : 0) + moveCritRate;
         return stage >= 3 || Random.Next(stage switch { 0 => 16, 1 => 8, _ => 2 }) == 0;
     }
 
     // 랭크를 바꾸고 기록을 남긴다. 이미 한계(+6/-6)면 바뀌지 않는다. 실제로 바뀐 단계를 돌려준다.
-    private int ChangeStage(BattleSide side, Stat stat, int delta, bool announceFailure)
+    private int ChangeStage(BattleSlot side, Stat stat, int delta, bool announceFailure)
     {
         BattlePokemon pokemon = side.Current;
         int before = pokemon.GetStage(stat);
@@ -116,11 +116,11 @@ partial class Battle
         return after - before;
     }
 
-    private void UseStatChangeMove(BattleSide attacker, BattleSide defender,
+    private void UseStatChangeMove(BattleSlot attacker, BattleSlot defender,
         (Stat Stat, int Change, string Target)[] changes)
     {
         // 흰안개: 상대가 쓰는 능력치 하락을 막는다. (뽐내기처럼 상대 능력치를 올리는 기술은 막지 않는다.)
-        if (defender.MistTurns > 0 && changes.Any(change => change.Target == "opponent" && change.Change < 0))
+        if (defender.Side.MistTurns > 0 && changes.Any(change => change.Target == "opponent" && change.Change < 0))
         {
             LogPokemon(defender, $"{WithJosa(defender.Current.Info.Name, "은", "는")} 흰안개에 보호되고 있다!");
             return;
@@ -130,7 +130,7 @@ partial class Battle
     }
 
     // 실제 변화 방향마다 한 번만 연출한다. 배턴터치의 교체·랭크 전달은 증감으로 처리하지 않는다.
-    private bool SendStatEffects(BattleSide side, BattlePokemon original,
+    private bool SendStatEffects(BattleSlot side, BattlePokemon original,
         int[] before, bool focusEnergyBefore, int typeId)
     {
         if (!ReferenceEquals(side.Current, original)) return false;
@@ -144,27 +144,27 @@ partial class Battle
         foreach (string direction in new[] { "UP", "DOWN" })
         {
             if (direction == "UP" ? !raised : !lowered) continue;
-            Send(side, $"BATTLE_STAT {typeId} {direction} SELF");
-            Send(GetOther(side), $"BATTLE_STAT {typeId} {direction} OPPONENT");
+            Send(side.Side, $"BATTLE_STAT {typeId} {direction} SELF");
+            Send(DefaultTarget(side).Side, $"BATTLE_STAT {typeId} {direction} OPPONENT");
         }
         return raised;
     }
 
     // 자신·우리 편의 보호·지속 효과. 실패하거나 턴이 지나는 것만으로는 늘지 않는 값을 비교한다.
-    private int[] GetBuffLevels(BattleSide side)
+    private int[] GetBuffLevels(BattleSlot side)
     {
         BattlePokemon pokemon = side.Current;
         return [
-            side.ReflectTurns, side.LightScreenTurns, side.TailwindTurns, side.MistTurns,
-            side.LuckyChantTurns, side.SafeguardTurns, side.WishTurns,
-            side.QuickGuard ? 1 : 0, side.WideGuard ? 1 : 0, side.MatBlock ? 1 : 0, side.CraftyShield ? 1 : 0,
+            side.Side.ReflectTurns, side.Side.LightScreenTurns, side.Side.TailwindTurns, side.Side.MistTurns,
+            side.Side.LuckyChantTurns, side.Side.SafeguardTurns, side.WishTurns,
+            side.Side.QuickGuard ? 1 : 0, side.Side.WideGuard ? 1 : 0, side.Side.MatBlock ? 1 : 0, side.Side.CraftyShield ? 1 : 0,
             pokemon.Protected ? 1 : 0, pokemon.Enduring ? 1 : 0, pokemon.MagnetRiseTurns,
             pokemon.MagicCoat ? 1 : 0, pokemon.SubstituteHp,
             pokemon.AquaRing ? 1 : 0, pokemon.Ingrained ? 1 : 0, pokemon.StockpileCount, pokemon.ChargeTurns
         ];
     }
 
-    private bool HasNewBuff(BattleSide side, int[] before)
+    private bool HasNewBuff(BattleSlot side, int[] before)
     {
         int[] after = GetBuffLevels(side);
         for (int index = 0; index < before.Length; index++)
@@ -173,30 +173,30 @@ partial class Battle
     }
 
     // 랭크 대신 우리 편·필드 효과를 걸거나, 능력치를 나누고 바꾸는 기술
-    private void UseSpecialMove(BattleSide attacker, BattleSide defender, PokemonMoveInfo move)
+    private void UseSpecialMove(BattleSlot attacker, BattleSlot defender, PokemonMoveInfo move)
     {
         BattlePokemon user = attacker.Current, target = defender.Current;
         string subject = WithJosa(user.Info.Name, "은", "는");
         switch (move.Id)
         {
             case ReflectMoveId:
-                StartSideEffect(attacker, attacker.ReflectTurns, 5, value => attacker.ReflectTurns = value,
+                StartSideEffect(attacker, attacker.Side.ReflectTurns, 5, value => attacker.Side.ReflectTurns = value,
                     "리플렉터로 {0}이 물리 공격에 강해졌다!");
                 break;
             case LightScreenMoveId:
-                StartSideEffect(attacker, attacker.LightScreenTurns, 5, value => attacker.LightScreenTurns = value,
+                StartSideEffect(attacker, attacker.Side.LightScreenTurns, 5, value => attacker.Side.LightScreenTurns = value,
                     "빛의장막으로 {0}이 특수 공격에 강해졌다!");
                 break;
             case TailwindMoveId:
-                StartSideEffect(attacker, attacker.TailwindTurns, 4, value => attacker.TailwindTurns = value,
+                StartSideEffect(attacker, attacker.Side.TailwindTurns, 4, value => attacker.Side.TailwindTurns = value,
                     "{0} 뒤에서 순풍이 불기 시작했다!");
                 break;
             case MistMoveId:
-                StartSideEffect(attacker, attacker.MistTurns, 5, value => attacker.MistTurns = value,
+                StartSideEffect(attacker, attacker.Side.MistTurns, 5, value => attacker.Side.MistTurns = value,
                     "{0}이 흰안개에 둘러싸였다!");
                 break;
             case LuckyChantMoveId:
-                StartSideEffect(attacker, attacker.LuckyChantTurns, 5, value => attacker.LuckyChantTurns = value,
+                StartSideEffect(attacker, attacker.Side.LuckyChantTurns, 5, value => attacker.Side.LuckyChantTurns = value,
                     "주술로 {0}이 급소에 맞지 않게 되었다!");
                 break;
             case FocusEnergyMoveId:
@@ -215,13 +215,13 @@ partial class Battle
                 break;
             case DefogMoveId:
                 // 상대 회피율 -1, 상대 편의 리플렉터·빛의장막·흰안개를 없앤다.
-                if (defender.MistTurns > 0)
+                if (defender.Side.MistTurns > 0)
                     LogPokemon(defender, $"{WithJosa(target.Info.Name, "은", "는")} 흰안개에 보호되고 있다!");
                 else
                     ChangeStage(defender, Stat.Evasion, -1, announceFailure: true);
-                if (defender.ReflectTurns + defender.LightScreenTurns + defender.MistTurns + defender.SafeguardTurns > 0)
+                if (defender.Side.ReflectTurns + defender.Side.LightScreenTurns + defender.Side.MistTurns + defender.Side.SafeguardTurns > 0)
                 {
-                    defender.ReflectTurns = defender.LightScreenTurns = defender.MistTurns = defender.SafeguardTurns = 0;
+                    defender.Side.ReflectTurns = defender.Side.LightScreenTurns = defender.Side.MistTurns = defender.Side.SafeguardTurns = 0;
                     LogSide(defender, "{0}의 리플렉터·빛의장막·흰안개·신비의부적이 사라졌다!");
                 }
                 // 6세대부터 양쪽 편의 설치기도 없앤다.
@@ -270,7 +270,7 @@ partial class Battle
                 break;
             case MementoMoveId:
                 // 상대의 공격·특수공격을 2단계씩 내리고 자신은 쓰러진다. (흰안개가 있어도 쓰러진다.)
-                if (defender.MistTurns > 0)
+                if (defender.Side.MistTurns > 0)
                     LogPokemon(defender, $"{WithJosa(target.Info.Name, "은", "는")} 흰안개에 보호되고 있다!");
                 else
                 {
@@ -310,13 +310,13 @@ partial class Battle
 
     // 배턴터치: 다음 포켓몬을 골라(턴 도중 교체) 랭크·기충전·혼란·아쿠아링·뿌리박기·대타를 그대로 넘겨준다.
     // 교체할 포켓몬이 없으면 실패한다. 넘겨주는 처리는 CompleteMidTurnSwitch에서 한다.
-    private void UseBatonPass(BattleSide side)
+    private void UseBatonPass(BattleSlot side)
     {
         if (!StartMidTurnSwitch(side, batonPass: true))
             LogBoth(side, "하지만 실패했다!");
     }
 
-    private void StartSideEffect(BattleSide side, int turnsLeft, int duration,
+    private void StartSideEffect(BattleSlot side, int turnsLeft, int duration,
         Action<int> setTurns, string message)
     {
         if (turnsLeft > 0)
@@ -331,24 +331,25 @@ partial class Battle
     // 턴 끝: 우리 편·필드 효과의 남은 턴을 줄이고, 끝나면 알린다.
     private void TickSideEffects()
     {
-        foreach (BattleSide side in new[] { HostSide!, GuestSide! })
+        foreach (BattleSide team in new[] { HostSide, GuestSide })
         {
-            side.ReflectTurns = Tick(side, side.ReflectTurns, "리플렉터");
-            side.LightScreenTurns = Tick(side, side.LightScreenTurns, "빛의장막");
-            side.TailwindTurns = Tick(side, side.TailwindTurns, "순풍");
-            side.MistTurns = Tick(side, side.MistTurns, "흰안개");
-            side.LuckyChantTurns = Tick(side, side.LuckyChantTurns, "주술");
-            side.SafeguardTurns = Tick(side, side.SafeguardTurns, "신비의부적");
+            BattleSlot side = team.Slots[0];
+            team.ReflectTurns = Tick(side, team.ReflectTurns, "리플렉터");
+            team.LightScreenTurns = Tick(side, team.LightScreenTurns, "빛의장막");
+            team.TailwindTurns = Tick(side, team.TailwindTurns, "순풍");
+            team.MistTurns = Tick(side, team.MistTurns, "흰안개");
+            team.LuckyChantTurns = Tick(side, team.LuckyChantTurns, "주술");
+            team.SafeguardTurns = Tick(side, team.SafeguardTurns, "신비의부적");
         }
         if (TrickRoomTurns > 0 && --TrickRoomTurns == 0)
-            LogBoth(HostSide!, "뒤틀린 시공이 원래대로 돌아왔다!");
+            LogBoth(HostSide.Slots[0], "뒤틀린 시공이 원래대로 돌아왔다!");
 
-        foreach (BattleSide side in new[] { HostSide!, GuestSide! })
+        foreach (BattleSlot side in AllSlots)
             if (side.Current.ChargeTurns > 0)
                 side.Current.ChargeTurns--;
     }
 
-    private int Tick(BattleSide side, int turnsLeft, string effect)
+    private int Tick(BattleSlot side, int turnsLeft, string effect)
     {
         if (turnsLeft == 0)
             return 0;
@@ -384,6 +385,6 @@ partial class Battle
     }
 
     // 우리 편 전체 이야기: side 플레이어에게는 "우리 편", 상대에게는 "상대 편"으로 보낸다.
-    private void LogSide(BattleSide side, string format) =>
+    private void LogSide(BattleSlot side, string format) =>
         Log(side, string.Format(format, "우리 편"), string.Format(format, "상대 편"));
 }

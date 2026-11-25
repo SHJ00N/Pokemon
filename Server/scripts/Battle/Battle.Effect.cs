@@ -31,7 +31,7 @@ partial class Battle
     // 대타를 무시하는 기술: 소리 기술과 DB 플래그 authentic(사슬묶기·앙코르·도발·저주·이차원홀 등, 6세대)
     private bool BypassesSubstitute(PokemonMoveInfo move) => SoundMoveIds.Contains(move.Id) || HasFlag(move, "authentic");
 
-    private void UseEffectMove(BattleSide attacker, BattleSide defender, PokemonMoveInfo move)
+    private void UseEffectMove(BattleSlot attacker, BattleSlot defender, PokemonMoveInfo move)
     {
         BattlePokemon user = attacker.Current, target = defender.Current;
         string userSubject = WithJosa(user.Info.Name, "은", "는"), targetSubject = WithJosa(target.Info.Name, "은", "는");
@@ -261,14 +261,14 @@ partial class Battle
             case RototillerMoveId:
             case FlowerShieldMoveId:
                 // 일구기: 땅에 있는 풀 타입 공격·특수공격 +1, 플라워가드: 풀 타입 방어 +1 (양쪽 모두)
-                BattleSide[] grass = new[] { attacker, defender }.Where(side => HasType(side.Current, "풀") &&
+                BattleSlot[] grass = new[] { attacker, defender }.Where(side => HasType(side.Current, "풀") &&
                     (move.Id == FlowerShieldMoveId || IsGrounded(side.Current))).ToArray();
                 if (grass.Length == 0)
                 {
                     Fail();
                     break;
                 }
-                foreach (BattleSide side in grass)
+                foreach (BattleSlot side in grass)
                 {
                     BattlePokemon pokemon = side.Current;
                     int[] before = pokemon.Stages.ToArray();
@@ -287,30 +287,33 @@ partial class Battle
     }
 
     // 지금 그 슬롯의 기술을 쓸 수 없는 이유. 쓸 수 있으면 null
-    public string? MoveBlockedBy(BattleSide side, BattleSide other, int slot)
+    public string? MoveBlockedBy(BattleSlot slot, int moveSlot)
     {
-        BattlePokemon pokemon = side.Current;
-        BattleMoveSlot selected = pokemon.Moves[slot - 1];
+        BattlePokemon pokemon = slot.Current;
+        BattleMoveSlot selected = pokemon.Moves[moveSlot - 1];
         PokemonMoveInfo move = selected.Move;
         if (IsBlockedByGravity(move)) return "중력";
         if (selected.Pp == 0) return "PP 부족";
-        if (pokemon.DisabledSlot == slot) return "사슬묶기";
-        if (pokemon.EncoreTurns > 0 && pokemon.EncoreSlot != slot) return "앙코르";
+        if (pokemon.DisabledSlot == moveSlot) return "사슬묶기";
+        if (pokemon.EncoreTurns > 0 && pokemon.EncoreSlot != moveSlot) return "앙코르";
         if (pokemon.Tormented && pokemon.LastMoveSlot is int last && pokemon.Moves[last - 1].Move.Id == move.Id) return "트집";
         if (pokemon.TauntTurns > 0 && move.Category == "변화") return "도발";
         if (pokemon.HealBlockTurns > 0 && HasFlag(move, "heal")) return "회복봉인";
-        if (other.Current.Imprisoning && other.Current.Hp > 0 && other.Current.Moves.Any(known => known.Move.Id == move.Id)) return "봉인";
+        // 봉인: 상대 편에서 봉인을 쓴 포켓몬이 아는 기술
+        if (OpposingSide(slot.Side).Slots.Any(foe => foe.Current.Imprisoning && foe.Current.Hp > 0 &&
+                foe.Current.Moves.Any(known => known.Move.Id == move.Id)))
+            return "봉인";
         return null;
     }
 
     // 쓸 수 있는 기술이 하나도 없으면 발버둥을 쓴다.
-    public bool MustStruggle(BattleSide side, BattleSide other) =>
-        Enumerable.Range(1, side.Current.Moves.Length).All(slot => MoveBlockedBy(side, other, slot) != null);
+    public bool MustStruggle(BattleSlot slot) =>
+        Enumerable.Range(1, slot.Current.Moves.Length).All(moveSlot => MoveBlockedBy(slot, moveSlot) != null);
 
     // 턴 끝: 씨뿌리기 (화상·독 데미지보다 먼저). 씨를 심은 쪽 자리의 포켓몬이 빼앗은 만큼 회복한다.
-    private void TickLeechSeed(IEnumerable<BattleSide> sides)
+    private void TickLeechSeed(IEnumerable<BattleSlot> sides)
     {
-        foreach (BattleSide side in sides)
+        foreach (BattleSlot side in sides)
         {
             BattlePokemon pokemon = side.Current;
             if (pokemon.Hp == 0 || !pokemon.LeechSeeded)
@@ -319,15 +322,15 @@ partial class Battle
             Log(side, $"씨뿌리기가 {pokemon.Info.Name}의 체력을 빼앗는다! ({damage} 데미지)",
                 $"씨뿌리기가 상대 {pokemon.Info.Name}의 체력을 빼앗는다! ({damage} 데미지)");
             DealDamage(side, damage);
-            Heal(GetOther(side), damage);
+            Heal(DefaultTarget(side), damage);
             SendBattleState();
         }
     }
 
     // 턴 끝: 악몽·저주 데미지 → 멸망의노래 카운트 → 기술 제한·록온·텔레키네시스·전자부유의 남은 턴
-    private void TickEffects(IEnumerable<BattleSide> sides)
+    private void TickEffects(IEnumerable<BattleSlot> sides)
     {
-        foreach (BattleSide side in sides)
+        foreach (BattleSlot side in sides)
         {
             BattlePokemon pokemon = side.Current;
             string subject = WithJosa(pokemon.Info.Name, "은", "는");
@@ -346,7 +349,7 @@ partial class Battle
                 DealDamage(side, damage);
             }
         }
-        foreach (BattleSide side in sides)
+        foreach (BattleSlot side in sides)
         {
             BattlePokemon pokemon = side.Current;
             if (pokemon.Hp == 0 || pokemon.PerishCount == 0)
@@ -355,7 +358,7 @@ partial class Battle
             if (pokemon.PerishCount == 0)
                 DealDamage(side, pokemon.Hp);
         }
-        foreach (BattleSide side in sides)
+        foreach (BattleSlot side in sides)
         {
             BattlePokemon pokemon = side.Current;
             string name = pokemon.Info.Name;
