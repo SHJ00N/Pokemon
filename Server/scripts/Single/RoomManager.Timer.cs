@@ -59,7 +59,8 @@ partial class RoomManager
     // 시간이 지나면 사용할 수 있는 기술을 무작위로 고른다. 교체를 기다리는 중이면 남은 첫 포켓몬을 내보낸다.
     private void ActionTimeout(GameRoom room)
     {
-        BattleSide host = room.HostSide!, guest = room.GuestSide!;
+        Battle battle = room.Battle!;
+        BattleSide host = battle.HostSide, guest = battle.GuestSide;
         room.ActionDeadline = null;
 
         // 턴 도중 교체나 기절 후 교체를 기다리는 중이면 교체할 쪽만, 아니면 아직 고르지 않은 쪽이 늦은 것이다.
@@ -73,37 +74,34 @@ partial class RoomManager
         {
             if (midTurn || forcedSwitch)
             {
-                Log(room, side, "시간 초과로 교체할 포켓몬을 자동 선택했다!", "상대가 시간 초과로 교체할 포켓몬을 자동 선택했다!");
+                battle.Log(side, "시간 초과로 교체할 포켓몬을 자동 선택했다!", "상대가 시간 초과로 교체할 포켓몬을 자동 선택했다!");
                 int replacement = Enumerable.Range(0, side.Team.Length)
                     .First(index => index != side.Active && side.Team[index].Hp > 0);
                 if (midTurn)
                 {
-                    CompleteMidTurnSwitch(room, side, replacement);
+                    Proceed(room, battle.CompleteMidTurnSwitch(side, replacement));
                     return;
                 }
-                SendInReplacement(room, side, replacement);
+                battle.SendInReplacement(side, replacement);
             }
             else
             {
-                BattleSide other = GetOther(room, side);
+                BattleSide other = battle.GetOther(side);
                 int[] available = Enumerable.Range(1, side.Current.Moves.Length)
-                    .Where(slot => MoveBlockedBy(room, side, other, slot) == null).ToArray();
+                    .Where(slot => battle.MoveBlockedBy(side, other, slot) == null).ToArray();
                 side.Struggling = available.Length == 0;
-                int slot = side.Struggling ? 1 : available[room.Random.Next(available.Length)];
+                int slot = side.Struggling ? 1 : available[battle.Random.Next(available.Length)];
                 side.ChosenMove = slot;
-                string name = side.Struggling ? data.MovesById[StruggleMoveId].Name : side.Current.Moves[slot - 1].Move.Name;
-                string selected = WithJosa(name, "을", "를");
-                Log(room, side, $"시간 초과로 {selected} 자동 선택했다!", $"상대가 시간 초과로 {selected} 자동 선택했다!");
+                string name = side.Struggling ? data.MovesById[Battle.StruggleMoveId].Name : side.Current.Moves[slot - 1].Move.Name;
+                string selected = Battle.WithJosa(name, "을", "를");
+                battle.Log(side, $"시간 초과로 {selected} 자동 선택했다!", $"상대가 시간 초과로 {selected} 자동 선택했다!");
             }
         }
 
         if (forcedSwitch)
-        {
-            if (!EndBattleIfOver(room))
-                StartTurn(room);
-        }
-        else
-            TryResolveTurn(room);
+            Proceed(room, battle.CheckEnd());
+        else if (battle.AllChosen)
+            Proceed(room, battle.ResolveTurn());
     }
 
     // BATTLE_END <WIN|LOSE|DRAW> TIMEOUT

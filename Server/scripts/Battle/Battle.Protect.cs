@@ -1,5 +1,5 @@
 // 방어·보호 기술. 수치는 6세대 규칙을 따른다.
-partial class RoomManager
+partial class Battle
 {
     private const int ProtectMoveId = 182, DetectMoveId = 197, EndureMoveId = 203, SubstituteMoveId = 164,
         SafeguardMoveId = 219, MagicCoatMoveId = 277, QuickGuardMoveId = 501;
@@ -53,7 +53,7 @@ partial class RoomManager
     }
 
     // 킹실드·니들가드로 막은 기술이 접촉 기술이면: 킹실드는 공격 -2, 니들가드는 최대 HP의 1/8 데미지
-    private void ProtectContactEffect(GameRoom room, BattleSide attacker, BattleSide defender, PokemonMoveInfo move)
+    private void ProtectContactEffect(BattleSide attacker, BattleSide defender, PokemonMoveInfo move)
     {
         BattlePokemon user = attacker.Current, target = defender.Current;
         if (!target.Protected || !HasFlag(move, "contact"))
@@ -61,18 +61,18 @@ partial class RoomManager
         if (target.ProtectKind == "kings")
         {
             int[] before = user.Stages.ToArray();
-            ChangeStage(room, attacker, Stat.Attack, -2, announceFailure: false);
-            SendStatEffects(room, attacker, user, before, user.FocusEnergy, TypeIdOf("강철"));
+            ChangeStage(attacker, Stat.Attack, -2, announceFailure: false);
+            SendStatEffects(attacker, user, before, user.FocusEnergy, TypeIdOf("강철"));
         }
         else if (target.ProtectKind == "spiky")
         {
             int damage = Math.Max(1, user.MaxHp / 8);
-            LogPokemon(room, attacker, $"{WithJosa(user.Info.Name, "은", "는")} 니들가드에 찔렸다! ({damage} 데미지)");
-            DealDamage(room, attacker, damage);
+            LogPokemon(attacker, $"{WithJosa(user.Info.Name, "은", "는")} 니들가드에 찔렸다! ({damage} 데미지)");
+            DealDamage(attacker, damage);
         }
     }
 
-    private static void UseProtectMove(GameRoom room, BattleSide side, PokemonMoveInfo move, bool movesLast)
+    private void UseProtectMove(BattleSide side, PokemonMoveInfo move, bool movesLast)
     {
         BattlePokemon user = side.Current;
         string subject = WithJosa(user.Info.Name, "은", "는");
@@ -88,11 +88,11 @@ partial class RoomManager
                 // 그 턴에 마지막으로 행동하면 실패하고, 연속으로 쓰면 성공 확률이 1/3, 1/9 ... 로 줄어든다(6세대).
                 // 패스트가드·와이드가드는 연속으로 써도 확률이 줄지 않지만, 쓰면 방어·판별·버티기의 연속 횟수는 늘어난다.
                 bool chanceFails = move.Id is not (QuickGuardMoveId or WideGuardMoveId) &&
-                    room.Random.NextDouble() >= Math.Pow(1.0 / 3, Math.Min(user.ProtectStreak, 6));
+                    Random.NextDouble() >= Math.Pow(1.0 / 3, Math.Min(user.ProtectStreak, 6));
                 if (movesLast || chanceFails)
                 {
                     user.ProtectStreak = 0;
-                    LogBoth(room, side, "하지만 실패했다!");
+                    LogBoth(side, "하지만 실패했다!");
                     return;
                 }
                 user.ProtectStreak++;
@@ -100,24 +100,24 @@ partial class RoomManager
                 if (move.Id == EndureMoveId)
                 {
                     user.Enduring = true;
-                    LogPokemon(room, side, $"{subject} 버티기 태세에 들어갔다!");
+                    LogPokemon(side, $"{subject} 버티기 태세에 들어갔다!");
                 }
                 else if (move.Id == QuickGuardMoveId)
                 {
                     side.QuickGuard = true;
-                    LogSide(room, side, "{0}이 패스트가드로 보호받고 있다!");
+                    LogSide(side, "{0}이 패스트가드로 보호받고 있다!");
                 }
                 else if (move.Id == WideGuardMoveId)
                 {
                     side.WideGuard = true;
-                    LogSide(room, side, "{0}이 와이드가드로 보호받고 있다!");
+                    LogSide(side, "{0}이 와이드가드로 보호받고 있다!");
                 }
                 else
                 {
                     // 킹실드: 변화 기술은 막지 못하고, 막은 접촉 공격의 공격 -2. 니들가드: 막은 접촉 공격에 1/8 데미지
                     user.Protected = true;
                     user.ProtectKind = move.Id switch { KingsShieldMoveId => "kings", SpikyShieldMoveId => "spiky", _ => null };
-                    LogPokemon(room, side, $"{subject} 방어 태세에 들어갔다!");
+                    LogPokemon(side, $"{subject} 방어 태세에 들어갔다!");
                 }
                 break;
 
@@ -125,73 +125,73 @@ partial class RoomManager
                 // 나온 뒤 첫 행동일 때만, 그 턴의 공격 기술을 막는다.
                 if (user.MoveActions > 1 || movesLast)
                 {
-                    LogBoth(room, side, "하지만 실패했다!");
+                    LogBoth(side, "하지만 실패했다!");
                     return;
                 }
                 side.MatBlock = true;
-                LogPokemon(room, side, $"{subject} 다다미를 세워 공격을 막으려 한다!");
+                LogPokemon(side, $"{subject} 다다미를 세워 공격을 막으려 한다!");
                 break;
 
             case CraftyShieldMoveId:
                 // 그 턴에 상대의 변화 기술을 막는다.
                 if (movesLast)
                 {
-                    LogBoth(room, side, "하지만 실패했다!");
+                    LogBoth(side, "하지만 실패했다!");
                     return;
                 }
                 side.CraftyShield = true;
-                LogSide(room, side, "{0}이 트릭가드로 보호받고 있다!");
+                LogSide(side, "{0}이 트릭가드로 보호받고 있다!");
                 break;
 
             case MagicCoatMoveId:
                 if (movesLast)
                 {
-                    LogBoth(room, side, "하지만 실패했다!");
+                    LogBoth(side, "하지만 실패했다!");
                     return;
                 }
                 user.MagicCoat = true;
-                LogPokemon(room, side, $"{subject} 매직코트로 몸을 감쌌다!");
+                LogPokemon(side, $"{subject} 매직코트로 몸을 감쌌다!");
                 break;
 
             case SubstituteMoveId:
                 // 최대 HP의 1/4을 써서 같은 HP의 대타를 만든다.
                 if (user.SubstituteHp > 0)
-                    LogBoth(room, side, "하지만 이미 대타가 나와 있다!");
+                    LogBoth(side, "하지만 이미 대타가 나와 있다!");
                 else if (user.Hp <= user.MaxHp / 4)
-                    LogBoth(room, side, "하지만 대타를 만들 체력이 부족하다!");
+                    LogBoth(side, "하지만 대타를 만들 체력이 부족하다!");
                 else
                 {
                     user.Hp -= user.MaxHp / 4;
                     user.SubstituteHp = user.MaxHp / 4;
-                    LogPokemon(room, side, $"{user.Info.Name}의 대타가 나타났다!");
+                    LogPokemon(side, $"{user.Info.Name}의 대타가 나타났다!");
                 }
                 break;
 
             case SafeguardMoveId:
-                StartSideEffect(room, side, side.SafeguardTurns, 5, value => side.SafeguardTurns = value,
+                StartSideEffect(side, side.SafeguardTurns, 5, value => side.SafeguardTurns = value,
                     "{0}이 신비의 베일에 둘러싸였다!");
                 break;
         }
     }
 
     // 대타가 있으면 대타가 데미지를 대신 받는다. 대타가 받았으면 true (이때 추가 효과는 없다)
-    private static bool HitSubstitute(GameRoom room, BattleSide defender, int damage)
+    private bool HitSubstitute(BattleSide defender, int damage)
     {
         BattlePokemon target = defender.Current;
         if (target.SubstituteHp == 0)
             return false;
         target.SubstituteHp = Math.Max(0, target.SubstituteHp - damage);
-        LogBoth(room, defender, "대타가 공격을 대신 받았다!");
+        LogBoth(defender, "대타가 공격을 대신 받았다!");
         if (target.SubstituteHp == 0)
-            LogPokemon(room, defender, $"{target.Info.Name}의 대타는 사라졌다!");
+            LogPokemon(defender, $"{target.Info.Name}의 대타는 사라졌다!");
         return true;
     }
 
     // 턴 끝: 이번 턴에만 유지되는 방어·버티기·매직코트·패스트가드·와이드가드·마룻바닥세워막기·트릭가드를 푼다.
     // 이번 턴에 방어 계열을 쓰지 않았으면 연속 횟수도 처음으로 돌린다.
-    private static void ClearTurnProtection(GameRoom room)
+    private void ClearTurnProtection()
     {
-        foreach (BattleSide side in new[] { room.HostSide!, room.GuestSide! })
+        foreach (BattleSide side in new[] { HostSide!, GuestSide! })
         {
             side.QuickGuard = side.WideGuard = side.MatBlock = side.CraftyShield = false;
             BattlePokemon pokemon = side.Current;

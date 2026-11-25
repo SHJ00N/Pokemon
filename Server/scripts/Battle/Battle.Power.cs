@@ -1,5 +1,5 @@
 // 위력이 조건에 따라 바뀌거나 정해진 데미지를 주는 공격기. 수치는 6세대 규칙을 따른다.
-partial class RoomManager
+partial class Battle
 {
     // 조건이 맞으면 위력 2배
     private const int SmellingSaltsMoveId = 265, WakeUpSlapMoveId = 358, RevengeMoveId = 279, AvalancheMoveId = 419,
@@ -28,7 +28,7 @@ partial class RoomManager
 
     // 기술의 위력. 조건에 따라 바뀌는 위력과 위력 값이 DB에 없는 기술의 위력을 계산한다. 위력이 없으면 null
     // hit: 연속기의 몇 번째 타격인지 (집단구타)
-    private int? BasePower(GameRoom room, BattleSide attackerSide, BattleSide defenderSide, BattlePokemon attacker,
+    private int? BasePower(BattleSide attackerSide, BattleSide defenderSide, BattlePokemon attacker,
         PokemonMoveInfo move, int hit)
     {
         BattlePokemon defender = defenderSide.Current;
@@ -69,7 +69,7 @@ partial class RoomManager
             // 구르기·아이스볼: 맞힐 때마다 2배 (웅크리기를 썼으면 다시 2배), 연속자르기: 맞힐 때마다 2배 (최대 160)
             RolloutMoveId or IceBallMoveId => (30 << attacker.RolloutHits) * (attacker.DefenseCurled ? 2 : 1),
             FuryCutterMoveId => 40 << Math.Min(2, attacker.FuryCutterHits),
-            EchoedVoiceMoveId => 40 * room.EchoedVoiceCount,    // 에코보이스: 매 턴 이어서 쓰이면 40씩 (최대 200)
+            EchoedVoiceMoveId => 40 * EchoedVoiceCount,    // 에코보이스: 매 턴 이어서 쓰이면 40씩 (최대 200)
             BeatUpMoveId => 5 + BeatUpMembers(attackerSide)[hit - 1].Info.BaseAttack / 10,
             _ => move.Power
         };
@@ -90,20 +90,20 @@ partial class RoomManager
             RetaliateMoveId => attackerSide.FaintedLastTurn,                // 지난 턴에 우리 편이 쓰러졌으면
             PursuitMoveId => defender.SwitchingOut,                         // 상대가 교체하려고 하면
             AcrobaticsMoveId => true,                                       // 지닌 도구가 없으면 (이 게임은 항상)
-            FusionFlareMoveId => room.LastMoveIdThisTurn == FusionBoltMoveId, // 이번 턴 바로 앞에 크로스썬더가 나왔으면
-            FusionBoltMoveId => room.LastMoveIdThisTurn == FusionFlareMoveId,
+            FusionFlareMoveId => LastMoveIdThisTurn == FusionBoltMoveId, // 이번 턴 바로 앞에 크로스썬더가 나왔으면
+            FusionBoltMoveId => LastMoveIdThisTurn == FusionFlareMoveId,
             _ => false
         };
         return doubled ? value * 2 : value;
     }
 
     // 정해진 데미지를 주는 기술의 데미지. 아니면 null. 급소·자속·난수·상성 배율 없이 효과가 없는지만 본다.
-    private static int? FixedDamage(GameRoom room, BattlePokemon attacker, BattlePokemon defender, PokemonMoveInfo move) => move.Id switch
+    private int? FixedDamage(BattlePokemon attacker, BattlePokemon defender, PokemonMoveInfo move) => move.Id switch
     {
         SonicBoomMoveId => 20,
         DragonRageMoveId => 40,
         SeismicTossMoveId or NightShadeMoveId => BattlePokemon.Level,
-        PsywaveMoveId => Math.Max(1, BattlePokemon.Level * room.Random.Next(50, 151) / 100),
+        PsywaveMoveId => Math.Max(1, BattlePokemon.Level * Random.Next(50, 151) / 100),
         SuperFangMoveId => Math.Max(1, defender.Hp / 2),                // 분노의앞니: 상대 HP의 절반
         EndeavorMoveId => defender.Hp - attacker.Hp,                    // 죽기살기: 상대 HP를 자신의 HP만큼으로
         FinalGambitMoveId => attacker.Hp,                               // 목숨걸기: 자신의 HP만큼 (자신은 쓰러짐)
@@ -116,7 +116,7 @@ partial class RoomManager
     };
 
     // 위력·데미지를 계산하기 전에 실패하는 경우
-    private static bool PowerMoveFails(BattleSide attackerSide, BattlePokemon attacker, BattlePokemon defender,
+    private bool PowerMoveFails(BattleSide attackerSide, BattlePokemon attacker, BattlePokemon defender,
         PokemonMoveInfo move) => move.Id switch
     {
         EndeavorMoveId => defender.Hp <= attacker.Hp,
@@ -129,13 +129,13 @@ partial class RoomManager
     };
 
     // 집단구타에 참여하는 포켓몬: 쓰러지지 않고 상태이상이 없는 우리 팀 포켓몬 (자신 포함). 한 마리당 한 번 때린다.
-    private static BattlePokemon[] BeatUpMembers(BattleSide side) =>
+    private BattlePokemon[] BeatUpMembers(BattleSide side) =>
         side.Team.Where(pokemon => pokemon.Hp > 0 && pokemon.Status == null).ToArray();
 
     // 매그니튜드: 4(5%) 10, 5(10%) 30, 6(20%) 50, 7(30%) 70, 8(20%) 90, 9(10%) 110, 10(5%) 150
-    private static void RollMagnitude(GameRoom room, BattlePokemon user)
+    private void RollMagnitude(BattlePokemon user)
     {
-        int roll = room.Random.Next(100);
+        int roll = Random.Next(100);
         (user.MagnitudeLevel, user.MagnitudePower) = roll switch
         {
             < 5 => (4, 10), < 15 => (5, 30), < 35 => (6, 50), < 65 => (7, 70), < 85 => (8, 90), < 95 => (9, 110), _ => (10, 150)
@@ -144,31 +144,31 @@ partial class RoomManager
 
     // 프레젠트: 40% 위력 40, 30% 위력 80, 10% 위력 120, 20%는 상대의 HP를 최대 HP의 1/4 회복시킨다.
     // 회복이면 처리하고 false를 돌려준다.
-    private bool RollPresent(GameRoom room, BattleSide attacker, BattleSide defender, PokemonMoveInfo move)
+    private bool RollPresent(BattleSide attacker, BattleSide defender, PokemonMoveInfo move)
     {
         BattlePokemon user = attacker.Current, target = defender.Current;
-        int roll = room.Random.Next(100);
+        int roll = Random.Next(100);
         user.PresentPower = roll switch { < 40 => 40, < 70 => 80, < 80 => 120, _ => 0 };
         if (user.PresentPower > 0)
             return true;
-        LogPokemon(room, attacker, $"{user.Info.Name}의 {move.Name}!");
-        if (!AccuracyCheck(room, user, target, move))
-            LogBoth(room, attacker, "하지만 빗나갔다!");
-        else if (!Heal(room, defender, target.MaxHp / 4))
-            LogBoth(room, attacker, "하지만 실패했다!");
+        LogPokemon(attacker, $"{user.Info.Name}의 {move.Name}!");
+        if (!AccuracyCheck(user, target, move))
+            LogBoth(attacker, "하지만 빗나갔다!");
+        else if (!Heal(defender, target.MaxHp / 4))
+            LogBoth(attacker, "하지만 실패했다!");
         return false;
     }
 
     // 참기: 2턴 동안 받은 데미지를 모았다가 3번째 턴에 2배로 돌려준다. 참는 동안은 행동이 정해진다(LOCKED).
     // 돌려줄 차례면 true (이어서 공격으로 처리한다)
-    private static bool UseBide(GameRoom room, BattleSide side, PokemonMoveInfo move, int slot)
+    private bool UseBide(BattleSide side, PokemonMoveInfo move, int slot)
     {
         BattlePokemon user = side.Current;
         string subject = WithJosa(user.Info.Name, "은", "는");
         if (user.BideTurns == 0)
         {
-            LogPokemon(room, side, $"{user.Info.Name}의 {move.Name}!");
-            LogPokemon(room, side, $"{subject} 참기 시작했다!");
+            LogPokemon(side, $"{user.Info.Name}의 {move.Name}!");
+            LogPokemon(side, $"{subject} 참기 시작했다!");
             user.BideTurns = 2;
             user.BideDamage = 0;
             user.LockedSlot = slot;
@@ -176,46 +176,46 @@ partial class RoomManager
         }
         if (--user.BideTurns > 0)
         {
-            LogPokemon(room, side, $"{subject} 참고 있다!");
+            LogPokemon(side, $"{subject} 참고 있다!");
             return false;
         }
         user.LockedSlot = null;
-        LogPokemon(room, side, $"{subject} 참았던 힘을 풀어놓았다!");
+        LogPokemon(side, $"{subject} 참았던 힘을 풀어놓았다!");
         if (user.BideDamage > 0)
             return true;
-        LogPokemon(room, side, $"{user.Info.Name}의 {move.Name}!");
-        LogBoth(room, side, "하지만 실패했다!");
+        LogPokemon(side, $"{user.Info.Name}의 {move.Name}!");
+        LogBoth(side, "하지만 실패했다!");
         return false;
     }
 
     // 정신차리기·잠깨움뺨치기: 맞은 상대의 마비·잠듦을 고친다. 비밀의힘: 30% 확률로 필드에 따라 마비(필드 없음·일렉트릭필드)
     // ·잠듦(그래스필드)·특수공격 -1(미스트필드)
-    private void ApplyPowerMoveEffects(GameRoom room, BattleSide attacker, BattleSide defender, PokemonMoveInfo move)
+    private void ApplyPowerMoveEffects(BattleSide attacker, BattleSide defender, PokemonMoveInfo move)
     {
         BattlePokemon target = defender.Current;
         if (move.Id == SmellingSaltsMoveId && target.Status == Paralysis)
         {
             target.Status = null;
-            LogPokemon(room, defender, $"{target.Info.Name}의 마비가 풀렸다!");
+            LogPokemon(defender, $"{target.Info.Name}의 마비가 풀렸다!");
         }
         if (move.Id == WakeUpSlapMoveId && target.Status == Sleep)
         {
             target.Status = null;
-            LogPokemon(room, defender, $"{WithJosa(target.Info.Name, "은", "는")} 눈을 떴다!");
+            LogPokemon(defender, $"{WithJosa(target.Info.Name, "은", "는")} 눈을 떴다!");
         }
-        if (move.Id == SecretPowerMoveId && room.Random.Next(100) < 30)
+        if (move.Id == SecretPowerMoveId && Random.Next(100) < 30)
         {
-            if (room.Terrain == MistyTerrain)
+            if (Terrain == MistyTerrain)
             {
                 if (defender.MistTurns == 0)
-                    ChangeStage(room, defender, Stat.SpAttack, -1, announceFailure: false);
+                    ChangeStage(defender, Stat.SpAttack, -1, announceFailure: false);
             }
             else
-                TryInflict(room, defender, room.Terrain == GrassyTerrain ? Sleep : Paralysis, announceFailure: false, fromOpponent: true);
+                TryInflict(defender, Terrain == GrassyTerrain ? Sleep : Paralysis, announceFailure: false, fromOpponent: true);
         }
     }
 
     // 싱크로노이즈: 자신과 같은 타입이 있는 상대에게만 맞는다.
-    private static bool SharesType(BattlePokemon a, BattlePokemon b) =>
+    private bool SharesType(BattlePokemon a, BattlePokemon b) =>
         a.Types.Intersect(b.Types).Any();
 }
