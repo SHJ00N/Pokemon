@@ -51,7 +51,7 @@ partial class RoomManager
                 if (resist.Length == 0)
                     LogBoth(room, attacker, "하지만 실패했다!");
                 else
-                    ChangeTypes(room, attacker, user, [resist[Random.Shared.Next(resist.Length)]]);
+                    ChangeTypes(room, attacker, user, [resist[room.Random.Next(resist.Length)]]);
                 break;
             case CamouflageMoveId:
                 // 필드에 따라 바뀐다: 없음(실내) 노말, 일렉트릭필드 전기, 그래스필드 풀, 미스트필드 페어리
@@ -135,7 +135,7 @@ partial class RoomManager
             case MetronomeMoveId:
                 // 6세대까지의 기술 중 무작위
                 PokemonMoveInfo[] pool = data.MovesById.Values.Where(Allowed).ToArray();
-                called = pool[Random.Shared.Next(pool.Length)];
+                called = pool[room.Random.Next(pool.Length)];
                 break;
             case MirrorMoveMoveId:
                 // 상대가 마지막으로 쓴 기술 (따라 할 수 있는 기술만)
@@ -152,7 +152,7 @@ partial class RoomManager
                 PokemonMoveInfo[] team = attacker.Team.Where(member => !ReferenceEquals(member, user))
                     .SelectMany(member => member.Moves).Select(slot => slot.Move).Where(Allowed).ToArray();
                 if (team.Length > 0)
-                    called = team[Random.Shared.Next(team.Length)];
+                    called = team[room.Random.Next(team.Length)];
                 break;
             case MeFirstMoveId:
                 // 상대가 이번 턴에 아직 행동하지 않았고 공격 기술을 골랐으면 그 기술을 위력 1.5배로 먼저 쓴다.

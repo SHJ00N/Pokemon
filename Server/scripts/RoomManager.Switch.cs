@@ -197,7 +197,7 @@ partial class RoomManager
         if (target.BoundBy != null)
             return;
         target.BoundBy = attacker.Current;
-        target.BoundTurns = Random.Shared.Next(5, 7);   // 턴 끝마다 1씩 줄어 0이 되면 풀린다 (데미지 4~5번)
+        target.BoundTurns = room.Random.Next(5, 7);   // 턴 끝마다 1씩 줄어 0이 되면 풀린다 (데미지 4~5번)
         target.BoundMove = move.Name;
         LogPokemon(room, defender, $"{WithJosa(target.Info.Name, "은", "는")} {move.Name}에 붙잡혔다!");
     }
@@ -248,7 +248,7 @@ partial class RoomManager
             .Where(index => index != side.Active && side.Team[index].Hp > 0).ToArray();
         if (bench.Length == 0 || side.Current.Ingrained)
             return false;
-        ChangeActive(room, side, bench[Random.Shared.Next(bench.Length)]);
+        ChangeActive(room, side, bench[room.Random.Next(bench.Length)]);
         LogPokemon(room, side, $"{WithJosa(side.Current.Info.Name, "이", "가")} 전투에 끌려 나왔다!");
         ApplyEntryHazards(room, side);
         return true;

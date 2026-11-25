@@ -98,12 +98,12 @@ partial class RoomManager
     }
 
     // 정해진 데미지를 주는 기술의 데미지. 아니면 null. 급소·자속·난수·상성 배율 없이 효과가 없는지만 본다.
-    private static int? FixedDamage(BattlePokemon attacker, BattlePokemon defender, PokemonMoveInfo move) => move.Id switch
+    private static int? FixedDamage(GameRoom room, BattlePokemon attacker, BattlePokemon defender, PokemonMoveInfo move) => move.Id switch
     {
         SonicBoomMoveId => 20,
         DragonRageMoveId => 40,
         SeismicTossMoveId or NightShadeMoveId => BattlePokemon.Level,
-        PsywaveMoveId => Math.Max(1, BattlePokemon.Level * Random.Shared.Next(50, 151) / 100),
+        PsywaveMoveId => Math.Max(1, BattlePokemon.Level * room.Random.Next(50, 151) / 100),
         SuperFangMoveId => Math.Max(1, defender.Hp / 2),                // 분노의앞니: 상대 HP의 절반
         EndeavorMoveId => defender.Hp - attacker.Hp,                    // 죽기살기: 상대 HP를 자신의 HP만큼으로
         FinalGambitMoveId => attacker.Hp,                               // 목숨걸기: 자신의 HP만큼 (자신은 쓰러짐)
@@ -133,9 +133,9 @@ partial class RoomManager
         side.Team.Where(pokemon => pokemon.Hp > 0 && pokemon.Status == null).ToArray();
 
     // 매그니튜드: 4(5%) 10, 5(10%) 30, 6(20%) 50, 7(30%) 70, 8(20%) 90, 9(10%) 110, 10(5%) 150
-    private static void RollMagnitude(BattlePokemon user)
+    private static void RollMagnitude(GameRoom room, BattlePokemon user)
     {
-        int roll = Random.Shared.Next(100);
+        int roll = room.Random.Next(100);
         (user.MagnitudeLevel, user.MagnitudePower) = roll switch
         {
             < 5 => (4, 10), < 15 => (5, 30), < 35 => (6, 50), < 65 => (7, 70), < 85 => (8, 90), < 95 => (9, 110), _ => (10, 150)
@@ -147,7 +147,7 @@ partial class RoomManager
     private bool RollPresent(GameRoom room, BattleSide attacker, BattleSide defender, PokemonMoveInfo move)
     {
         BattlePokemon user = attacker.Current, target = defender.Current;
-        int roll = Random.Shared.Next(100);
+        int roll = room.Random.Next(100);
         user.PresentPower = roll switch { < 40 => 40, < 70 => 80, < 80 => 120, _ => 0 };
         if (user.PresentPower > 0)
             return true;
@@ -203,7 +203,7 @@ partial class RoomManager
             target.Status = null;
             LogPokemon(room, defender, $"{WithJosa(target.Info.Name, "은", "는")} 눈을 떴다!");
         }
-        if (move.Id == SecretPowerMoveId && Random.Shared.Next(100) < 30)
+        if (move.Id == SecretPowerMoveId && room.Random.Next(100) < 30)
         {
             if (room.Terrain == MistyTerrain)
             {

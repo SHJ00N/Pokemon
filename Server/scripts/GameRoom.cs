@@ -3,6 +3,7 @@ using Pokemon.Protocol;
 class GameRoom
 {
     public int Id { get; }
+    public Random Random { get; }   // 이 방의 모든 무작위 (시드가 있으면 방마다 고정)
     // 전투가 시작된 뒤 방장이 나가면 남은 참여자가 방장이 된다.
     public ClientSession Host { get; set; }
     public ClientSession? Guest { get; set; }
@@ -41,10 +42,11 @@ class GameRoom
     public bool HostRematch { get; set; }
     public bool GuestRematch { get; set; }
 
-    public GameRoom(int id, ClientSession host)
+    public GameRoom(int id, ClientSession host, Random random)
     {
         Id = id;
         Host = host;
+        Random = random;
     }
 
     public void ResetBattle()

@@ -18,10 +18,12 @@ partial class RoomManager
     private readonly Dictionary<int, GameRoom> rooms = new();
     private readonly HashSet<string> nicknames = new();     // 접속 중인 플레이어의 닉네임 (중복 금지)
     private int nextRoomId = 1000;
+    private readonly int? seed;                     // 있으면 방마다 new Random(seed + 방 번호)
 
-    public RoomManager(GameData data)
+    public RoomManager(GameData data, int? seed = null)
     {
         this.data = data;
+        this.seed = seed;
         // 전국도감 905번까지 팀에 넣을 수 있는 폼만 보낸다. 폼 번호가 아닌 종 번호로 제한한다.
         var selectable = data.PokemonById.Values
             .Where(IsTeamSelectable)
@@ -105,7 +107,7 @@ partial class RoomManager
             }
 
             int roomId = nextRoomId++;
-            var room = new GameRoom(roomId, session);
+            var room = new GameRoom(roomId, session, seed is int s ? new Random(s + roomId) : new Random());
             rooms.Add(roomId, room);
             session.RoomId = roomId;
             session.State = new InRoomState();
@@ -511,7 +513,7 @@ partial class RoomManager
             .Where(side => side.ChosenMove != null && !pursued.Contains(side))
             .OrderByDescending(side => side.Struggling ? 0 : side.Current.Moves[side.ChosenMove!.Value - 1].Move.Priority)
             .ThenByDescending(side => room.TrickRoomTurns > 0 ? -GetSpeed(side) : GetSpeed(side))
-            .ThenBy(_ => Random.Shared.Next())
+            .ThenBy(_ => room.Random.Next())
             .ToList();
 
         foreach (BattleSide side in new[] { host, guest })
@@ -608,11 +610,11 @@ partial class RoomManager
 
         // 정해진 데미지를 주는 기술 (일격필살·지구던지기·카운터 등): 효과가 없는지만 본다.
         // 일격필살은 명중률 30으로 랭크에 영향을 받지 않는다(같은 레벨).
-        if (FixedDamage(attacker, defender, move) is int fixedDamage)
+        if (FixedDamage(room, attacker, defender, move) is int fixedDamage)
         {
             bool ohko = OhkoMoveIds.Contains(move.Id);
             bool lockedOn = ReferenceEquals(attacker.LockOnTarget, defender);
-            if (ohko ? !lockedOn && Random.Shared.Next(100) >= 30 : !AccuracyCheck(room, attacker, defender, move))
+            if (ohko ? !lockedOn && room.Random.Next(100) >= 30 : !AccuracyCheck(room, attacker, defender, move))
                 return (true, false, 0, 1, false);
             return TypeMultiplier(move, defender, room) == 0
                 ? (true, true, 0, 0, false)
@@ -650,7 +652,7 @@ partial class RoomManager
             attacker.ChargeTurns = 0;
         }
         bool physical = move.Category == "물리";
-        bool critical = RollCritical(attacker, defenderSide, data.MoveMetaById.GetValueOrDefault(move.Id)?.CritRate ?? 0);
+        bool critical = RollCritical(room, attacker, defenderSide, data.MoveMetaById.GetValueOrDefault(move.Id)?.CritRate ?? 0);
         // 속임수는 상대의 공격과 공격 랭크로, 사이코쇼크 등은 상대의 방어로 계산한다. 야금야금·성스러운칼은 상대 랭크를 무시한다.
         BattlePokemon attackSource = move.Id == FoulPlayMoveId ? defender : attacker;
         bool targetsDefense = physical || DefenseTargetMoveIds.Contains(move.Id);
@@ -678,7 +680,7 @@ partial class RoomManager
             damage /= 2;                                      // 리플렉터·빛의장막 (급소면 무시)
         if (critical)
             damage = damage * 3 / 2;                          // 급소 1.5배 (6세대)
-        damage = damage * Random.Shared.Next(85, 101) / 100;  // 난수 0.85~1.00
+        damage = damage * room.Random.Next(85, 101) / 100;  // 난수 0.85~1.00
         if (attacker.Types.Contains(move.TypeId) && move.Id != StruggleMoveId)
             damage = damage * 3 / 2;                          // 자속 보정 1.5배
         damage = Math.Max(1, (int)(damage * effectiveness));  // 타입 상성

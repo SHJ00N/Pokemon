@@ -89,7 +89,7 @@ partial class RoomManager
                 int[] available = Enumerable.Range(1, side.Current.Moves.Length)
                     .Where(slot => MoveBlockedBy(room, side, other, slot) == null).ToArray();
                 side.Struggling = available.Length == 0;
-                int slot = side.Struggling ? 1 : available[Random.Shared.Next(available.Length)];
+                int slot = side.Struggling ? 1 : available[room.Random.Next(available.Length)];
                 side.ChosenMove = slot;
                 string name = side.Struggling ? data.MovesById[StruggleMoveId].Name : side.Current.Moves[slot - 1].Move.Name;
                 string selected = WithJosa(name, "을", "를");

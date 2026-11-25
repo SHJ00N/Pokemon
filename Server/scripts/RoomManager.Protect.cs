@@ -88,7 +88,7 @@ partial class RoomManager
                 // 그 턴에 마지막으로 행동하면 실패하고, 연속으로 쓰면 성공 확률이 1/3, 1/9 ... 로 줄어든다(6세대).
                 // 패스트가드·와이드가드는 연속으로 써도 확률이 줄지 않지만, 쓰면 방어·판별·버티기의 연속 횟수는 늘어난다.
                 bool chanceFails = move.Id is not (QuickGuardMoveId or WideGuardMoveId) &&
-                    Random.Shared.NextDouble() >= Math.Pow(1.0 / 3, Math.Min(user.ProtectStreak, 6));
+                    room.Random.NextDouble() >= Math.Pow(1.0 / 3, Math.Min(user.ProtectStreak, 6));
                 if (movesLast || chanceFails)
                 {
                     user.ProtectStreak = 0;

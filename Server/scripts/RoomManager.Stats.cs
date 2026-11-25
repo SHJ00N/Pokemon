@@ -74,18 +74,18 @@ partial class RoomManager
             evasion = 0;    // 꿰뚫어보기·냄새구별·미라클아이: 오른 회피율을 무시한다.
         int stage = Math.Clamp(user.GetStage(Stat.Accuracy) - evasion, -6, 6);
         double gravity = room.GravityTurns > 0 ? 5.0 / 3 : 1;
-        return Random.Shared.Next(100) < accuracy * AccuracyMultiplier(stage) * gravity;
+        return room.Random.Next(100) < accuracy * AccuracyMultiplier(stage) * gravity;
     }
 
     // 급소 판정 (6세대): 급소 랭크 0 → 1/16, 1 → 1/8, 2 → 1/2, 3 이상 → 반드시.
     // 급소 랭크 = 기충전(+2) + 급소에 잘 맞는 기술(DB의 crit_rate, 업어후리기·얼음숨결은 6이라 반드시 급소).
     // 상대 편에 주술이 걸려 있으면 급소에 맞지 않는다.
-    private static bool RollCritical(BattlePokemon attacker, BattleSide defender, int moveCritRate)
+    private static bool RollCritical(GameRoom room, BattlePokemon attacker, BattleSide defender, int moveCritRate)
     {
         if (defender.LuckyChantTurns > 0)
             return false;
         int stage = (attacker.FocusEnergy ? 2 : 0) + moveCritRate;
-        return stage >= 3 || Random.Shared.Next(stage switch { 0 => 16, 1 => 8, _ => 2 }) == 0;
+        return stage >= 3 || room.Random.Next(stage switch { 0 => 16, 1 => 8, _ => 2 }) == 0;
     }
 
     // 랭크를 바꾸고 기록을 남긴다. 이미 한계(+6/-6)면 바뀌지 않는다. 실제로 바뀐 단계를 돌려준다.
@@ -303,7 +303,7 @@ partial class RoomManager
                 if (candidates.Length == 0)
                     LogBoth(room, attacker, "하지만 실패했다!");
                 else
-                    ChangeStage(room, attacker, candidates[Random.Shared.Next(candidates.Length)], 2, announceFailure: true);
+                    ChangeStage(room, attacker, candidates[room.Random.Next(candidates.Length)], 2, announceFailure: true);
                 break;
         }
     }

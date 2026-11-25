@@ -152,7 +152,7 @@ partial class RoomManager
         if (rampage && user.LockedSlot == null)
         {
             user.LockedSlot = slot;
-            user.LockTurnsLeft = Random.Shared.Next(2, 4);
+            user.LockTurnsLeft = room.Random.Next(2, 4);
         }
 
         // 가로채기: 상대가 이번 턴에 가로채기를 썼으면 자신을 대상으로 하는 변화 기술(DB 플래그 snatch)을 상대가 대신 쓴다.
@@ -277,7 +277,7 @@ partial class RoomManager
             LogBoth(room, side, "하지만 실패했다!");
             return null;
         }
-        return candidates[Random.Shared.Next(candidates.Length)];
+        return candidates[room.Random.Next(candidates.Length)];
     }
 
     // 공격이 맞았으면(대타가 맞은 것 포함) true
@@ -298,7 +298,7 @@ partial class RoomManager
             return false;
         }
         if (move.Id == MagnitudeMoveId)
-            RollMagnitude(user);
+            RollMagnitude(room, user);
         if (move.Id == PresentMoveId && !RollPresent(room, attacker, defender, move))
             return false;
 
@@ -308,7 +308,7 @@ partial class RoomManager
         bool hit = result.Supported && result.Hit && result.Effectiveness > 0;
         SendMoveEffect(room, attacker, move, hit ? result.Effectiveness : 0);
         // 집단구타는 참여하는 포켓몬 수만큼 때린다.
-        int hits = !hit ? 1 : move.Id == BeatUpMoveId ? BeatUpMembers(attacker).Length : RollHitCount(move);
+        int hits = !hit ? 1 : move.Id == BeatUpMoveId ? BeatUpMembers(attacker).Length : RollHitCount(room, move);
         LogPokemon(room, attacker, DescribeMove(user, move, result, multiHit: hits > 1));
         if (!hit)
             return false;
@@ -370,11 +370,11 @@ partial class RoomManager
     }
 
     // 연속기의 타격 횟수 (DB의 min_hits~max_hits). 연속기가 아니면 1
-    private int RollHitCount(PokemonMoveInfo move)
+    private int RollHitCount(GameRoom room, PokemonMoveInfo move)
     {
         if (data.MoveMetaById.GetValueOrDefault(move.Id) is not { MinHits: int min, MaxHits: int max })
             return 1;
-        return min == 2 && max == 5 ? TwoToFiveHits[Random.Shared.Next(TwoToFiveHits.Length)] : Random.Shared.Next(min, max + 1);
+        return min == 2 && max == 5 ? TwoToFiveHits[room.Random.Next(TwoToFiveHits.Length)] : room.Random.Next(min, max + 1);
     }
 
     // 공격기의 능력치 변화 추가 효과 (DB의 MoveStatChange, target은 self 또는 opponent).
@@ -414,12 +414,12 @@ partial class RoomManager
 
         // 흰안개가 있으면 능력치 하락이 막힌다.
         var changes = GetAttackStatChanges(move, "opponent");
-        if (changes.Length > 0 && defender.MistTurns == 0 && Random.Shared.Next(100) < changes[0].Chance)
+        if (changes.Length > 0 && defender.MistTurns == 0 && room.Random.Next(100) < changes[0].Chance)
             foreach (var (stat, change, _) in changes)
                 ChangeStage(room, defender, stat, change, announceFailure: false);
 
         // 풀죽음: 이번 턴에 아직 행동하지 않았다면 행동하지 못한다. (이미 행동했으면 턴이 끝날 때 풀린다)
-        if (Random.Shared.Next(100) < (data.MoveMetaById.GetValueOrDefault(move.Id)?.FlinchChance ?? 0))
+        if (room.Random.Next(100) < (data.MoveMetaById.GetValueOrDefault(move.Id)?.FlinchChance ?? 0))
             target.Flinched = true;
 
         if (BindingMoveIds.Contains(move.Id))
@@ -438,7 +438,7 @@ partial class RoomManager
     {
         BattlePokemon user = attacker.Current;
         var changes = GetAttackStatChanges(move, "self");
-        if (changes.Length > 0 && Random.Shared.Next(100) < changes[0].Chance)
+        if (changes.Length > 0 && room.Random.Next(100) < changes[0].Chance)
             foreach (var (stat, change, _) in changes)
                 ChangeStage(room, attacker, stat, change, announceFailure: false);
 
@@ -634,7 +634,7 @@ partial class RoomManager
             .Where(e => timing == null ? e.Timing != "after_sequence" : e.Timing == timing);
         foreach (var group in effects.GroupBy(e => e.EffectGroup == 0 ? (object)e : (e.EffectGroup, e.Target, e.Timing)))
         {
-            double roll = Random.Shared.NextDouble() * 100;
+            double roll = room.Random.NextDouble() * 100;
             MoveStatusEffectInfo? chosen = null;
             double total = 0;
             foreach (MoveStatusEffectInfo effect in group)
@@ -681,7 +681,7 @@ partial class RoomManager
                 success = target.ConfusionTurns == 0;
                 if (success && BlockedByField(room, side, code, announceFailure))
                     return;
-                if (success) target.ConfusionTurns = Random.Shared.Next(2, 6);  // 1~4턴 동안 혼란
+                if (success) target.ConfusionTurns = room.Random.Next(2, 6);  // 1~4턴 동안 혼란
                 text = "혼란에 빠졌다!";
                 break;
             case Infatuation:
@@ -697,7 +697,7 @@ partial class RoomManager
                 if (success)
                 {
                     target.Status = code;
-                    if (code == Sleep) target.SleepTurns = Random.Shared.Next(2, 5);
+                    if (code == Sleep) target.SleepTurns = room.Random.Next(2, 5);
                     if (code == BadPoison) target.ToxicCounter = 0;
                 }
                 text = code switch
@@ -786,7 +786,7 @@ partial class RoomManager
 
         if (user.Status == Freeze)
         {
-            if (!SelfThawMoveIds.Contains(move.Id) && Random.Shared.Next(100) >= 20)
+            if (!SelfThawMoveIds.Contains(move.Id) && room.Random.Next(100) >= 20)
             {
                 SendStatusEffect(room, side, Freeze);
                 LogPokemon(room, side, $"{subject} 얼어붙어서 움직일 수 없다!");
@@ -811,9 +811,9 @@ partial class RoomManager
                 SendStatusEffect(room, side, Confusion);
                 LogPokemon(room, side, $"{subject} 혼란에 빠져 있다!");
                 // 6세대까지는 50% 확률로 자신을 공격한다.
-                if (Random.Shared.Next(2) == 0)
+                if (room.Random.Next(2) == 0)
                 {
-                    int damage = ConfusionDamage(user);
+                    int damage = ConfusionDamage(room, user);
                     LogBoth(room, side, $"영문도 모른 채 자신을 공격했다! ({damage} 데미지)");
                     DealDamage(room, side, damage);
                     return false;
@@ -825,14 +825,14 @@ partial class RoomManager
         {
             SendStatusEffect(room, side, Infatuation);
             LogPokemon(room, side, $"{subject} 헤롱헤롱해 있다!");
-            if (Random.Shared.Next(2) == 0)
+            if (room.Random.Next(2) == 0)
             {
                 LogPokemon(room, side, $"{subject} 헤롱헤롱해서 기술을 쓸 수 없었다!");
                 return false;
             }
         }
 
-        if (user.Status == Paralysis && Random.Shared.Next(4) == 0)
+        if (user.Status == Paralysis && room.Random.Next(4) == 0)
         {
             SendStatusEffect(room, side, Paralysis);
             LogPokemon(room, side, $"{subject} 몸이 저려서 움직일 수 없다!");
@@ -842,10 +842,10 @@ partial class RoomManager
     }
 
     // 혼란 자해: 위력 40의 타입 없는 물리 공격을 자신에게 한다.
-    private static int ConfusionDamage(BattlePokemon pokemon)
+    private static int ConfusionDamage(GameRoom room, BattlePokemon pokemon)
     {
         int damage = (2 * BattlePokemon.Level / 5 + 2) * 40 * pokemon.Attack / pokemon.Defense / 50 + 2;
-        return Math.Max(1, damage * Random.Shared.Next(85, 101) / 100);
+        return Math.Max(1, damage * room.Random.Next(85, 101) / 100);
     }
 
     // 양쪽 행동이 끝난 뒤: 날씨(모래바람·싸라기눈 데미지) → 미래예지 → 그래스필드 회복
