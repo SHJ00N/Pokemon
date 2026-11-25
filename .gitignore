@@ -402,3 +402,7 @@ FodyWeavers.xsd
 
 # macOS
 .DS_Store
+
+# 테스트 빌드·결과 (tests/run_all.py)
+tests/.build/
+tests/.out/

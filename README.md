@@ -648,6 +648,19 @@ DB의 `MoveMeta`·`MoveStatChange`를 읽어 `RoomManager.UseDamagingMove`([Room
 - 포켓몬 선택 시간 초과로 끝난 결과 화면에서도 재도전·나가기를 똑같이 할 수 있습니다.
 - 포켓몬 선택 중에 나가는 경우는 이전과 같습니다. 호스트가 나가면 방이 닫히고(`ROOM_CLOSED`), 참여자가 나가면 호스트가 방으로 돌아갑니다(`RETURN_TO_ROOM`).
 
+## 테스트 실행
+
+`tests/suites/`의 통합 테스트 묶음은 각각 서버를 자기 포트로 띄워 TCP로 전투를 진행하며 규칙을 확인합니다. 저장소 루트에서 한 줄로 전부 실행합니다.
+
+```
+python tests/run_all.py
+```
+
+- 서버를 `tests/.build/server`에 빌드한 뒤 묶음을 차례로 실행하고, 묶음마다 `이름 PASS n FAIL m` 한 줄을 출력합니다. 끝에 `전체: 통과` 또는 `전체: 실패 k개 묶음`을 출력하며, 하나라도 실패하면 종료 코드 1입니다. 자세한 결과는 `tests/.out/<이름>.txt`에 남습니다.
+- 일부만 실행: `python tests/run_all.py --only attack,field` (묶음 파일 이름에서 `_test`를 뺀 이름)
+- 다시 빌드하지 않고 실행: `python tests/run_all.py --skip-build`
+- 전체 실행에는 몇 분 걸립니다. Python 3와 .NET SDK가 필요합니다.
+
 ## 남은 작업
 
 - [x] **진화 전 단계의 기술.** 습득 기술을 6세대(XY·ORAS) 기준으로 바꾸면서 진화 전 단계의 기술(알 기술 포함)을 물려받게 했습니다. 리자몽도 칼춤·용의춤·역린·배북·용의파동을 배웁니다.
