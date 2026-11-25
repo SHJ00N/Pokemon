@@ -16,8 +16,10 @@ C# / .NET 10 기반의 TCP 콘솔 포켓몬 게임입니다. 서버가 방과 �
 | [Server/Program.cs](Server/Program.cs) | DB 로딩, TCP 연결 수락, 접속별 세션 실행 |
 | [Server/scripts/ClientSession.cs](Server/scripts/ClientSession.cs) | 접속 하나의 명령 수신, 상태 위임, 응답 송신 |
 | [Server/scripts/States](Server/scripts/States) | 서버에서 플레이어 상태별 명령 처리 |
-| [Server/scripts/RoomManager.cs](Server/scripts/RoomManager.cs) | 방 생성·입장·퇴장, 준비, 포켓몬 선택 검증 및 양쪽 통지 |
-| [Server/scripts/GameRoom.cs](Server/scripts/GameRoom.cs) | 호스트·참여자와 각자의 포켓몬 선택 보관 |
+| [Server/scripts/Lobby/RoomManager.cs](Server/scripts/Lobby/RoomManager.cs) | 방 생성·입장·퇴장, 준비, 포켓몬 선택 검증 및 양쪽 통지 |
+| [Server/scripts/Single](Server/scripts/Single) | 1:1 대전 진행: 행동 받기, 안내, 제한시간, 결과·재도전 |
+| [Server/scripts/Battle](Server/scripts/Battle) | 전투 규칙(엔진): 데미지·기술 효과·날씨. 1:1과 2:2가 함께 쓴다 |
+| [Server/scripts/Lobby/GameRoom.cs](Server/scripts/Lobby/GameRoom.cs) | 호스트·참여자와 각자의 포켓몬 선택 보관 |
 | [Shared/GameMessages.cs](Shared/GameMessages.cs) | 양쪽 프로젝트가 함께 사용하는 JSON 데이터 형식 |
 | [Server/tools/build_db.py](Server/tools/build_db.py) | PokéAPI CSV로 포켓몬 DB를 다시 만드는 스크립트 |
 | [Shared/CatalogCodec.cs](Shared/CatalogCodec.cs) | 포켓몬 목록 메시지의 압축(서버)·압축 풀기(클라이언트) |
@@ -345,7 +347,7 @@ GameData 객체의 경우 RoomManager 객체가 소유하고 있습니다.
 double multiplier = data.GetMultiplier(move.TypeId, defender.Type1Id);
 ```
 
-기술별 상태이상 정보는 `data.MoveStatusEffectsByMoveId[move.Id]`, 상태 정의는 `data.StatusConditionsById[effect.StatusId]`로 조회합니다. 확률뿐 아니라 적용 대상·시점·추첨 그룹도 함께 확인해야 합니다. 데이터 범위와 필드 의미는 [DB 설명](Server/resources/db/README.md)에 정리되어 있습니다. 이 데이터로 8종 상태이상의 적용·해제와 턴 처리를 [RoomManager.Status.cs](Server/scripts/RoomManager.Status.cs)에서 구현했습니다(아래 "상태이상" 참고).
+기술별 상태이상 정보는 `data.MoveStatusEffectsByMoveId[move.Id]`, 상태 정의는 `data.StatusConditionsById[effect.StatusId]`로 조회합니다. 확률뿐 아니라 적용 대상·시점·추첨 그룹도 함께 확인해야 합니다. 데이터 범위와 필드 의미는 [DB 설명](Server/resources/db/README.md)에 정리되어 있습니다. 이 데이터로 8종 상태이상의 적용·해제와 턴 처리를 [Battle.Status.cs](Server/scripts/Battle/Battle.Status.cs)에서 구현했습니다(아래 "상태이상" 참고).
 
 예를 들어 기술 사용 기능은 다음 순서로 추가합니다.
 
@@ -361,16 +363,16 @@ double multiplier = data.GetMultiplier(move.TypeId, defender.Type1Id);
 
 ### 현재 구현된 전투
 
-- 양쪽 팀 선택이 끝나면 서버가 플레이어마다 [BattleSide](Server/scripts/BattleSide.cs)(팀, 출전 번호, 이번 턴 선택)를 만들고, 포켓몬마다 [BattlePokemon](Server/scripts/BattlePokemon.cs)을 만듭니다. 레벨 50, 개체값 31(6V), 노력치 0, 성격 보정 없이 실제 능력치를 계산합니다(HP = 종족값 + 75, 나머지 = 종족값 + 20).
-- 매 턴 양쪽이 동시에 기술(`RoomManager.UseMove`) 또는 교체(`RoomManager.SwitchPokemon`)를 고릅니다. 둘 다 고르면 `RoomManager.TryResolveTurn`이 교체를 먼저 처리한 뒤, 우선도 → 스피드 → 무작위 순으로 공격합니다. 그래서 상대가 교체하면 공격은 새로 나온 포켓몬이 맞습니다.
+- 양쪽 팀 선택이 끝나면 서버가 플레이어마다 [BattleSide](Server/scripts/Battle/BattleSide.cs)(팀, 출전 번호, 이번 턴 선택)를 만들고, 포켓몬마다 [BattlePokemon](Server/scripts/Battle/BattlePokemon.cs)을 만듭니다. 레벨 50, 개체값 31(6V), 노력치 0, 성격 보정 없이 실제 능력치를 계산합니다(HP = 종족값 + 75, 나머지 = 종족값 + 20).
+- 매 턴 양쪽이 동시에 기술(`RoomManager.UseMove`) 또는 교체(`RoomManager.SwitchPokemon`)를 고릅니다. 둘 다 고르면 `Battle.ResolveTurn`이 교체를 먼저 처리한 뒤, 우선도 → 스피드 → 무작위 순으로 공격합니다. 그래서 상대가 교체하면 공격은 새로 나온 포켓몬이 맞습니다.
 - 이번 턴에 먼저 쓰러진 포켓몬은 공격하지 못합니다. 쓰러진 쪽은 다음 포켓몬을 골라야 하며(`CHOOSE_SWITCH`), 이 교체는 턴을 쓰지 않아 상대가 추가로 공격하지 않습니다. 팀 3마리가 모두 쓰러지면 패배입니다.
-- 전투 규칙은 **6세대 기준**입니다. 데미지는 6세대 공식으로 계산합니다(`RoomManager.CalculateDamage`). 물리/특수 구분, 타입 상성(듀얼 타입은 곱함), 자속 1.5배, 난수 0.85~1.00, 명중률, 능력치 랭크, 급소, 날씨·필드를 반영합니다. 특성과 지닌 도구는 사용하지 않습니다.
+- 전투 규칙은 **6세대 기준**입니다. 데미지는 6세대 공식으로 계산합니다(`Battle.CalculateDamage`). 물리/특수 구분, 타입 상성(듀얼 타입은 곱함), 자속 1.5배, 난수 0.85~1.00, 명중률, 능력치 랭크, 급소, 날씨·필드를 반영합니다. 특성과 지닌 도구는 사용하지 않습니다.
 - 6세대 기준으로 기술 598개를 선택할 수 있습니다. 기술이 하나뿐인 **메타몽**(변신)은 그 기술을 선택해 팀에 넣을 수 있습니다. **루브도**(스케치)는 1대1에서 쓸모가 없어 2대2 대전을 만들 때 열기로 하고, **안농**(잠재파워)과 함께 지금은 막아 둡니다(`RoomManager.BlockedSpeciesIds`, 포켓몬 목록에도 보내지 않음).
 - 화상이면 물리 기술 데미지가 절반이 됩니다.
 
 ### 상태이상 (6세대 규칙)
 
-DB의 `StatusCondition`·`MoveStatusEffect`에 있는 8종을 구현했습니다. 기술 실행과 상태이상 처리는 [RoomManager.Status.cs](Server/scripts/RoomManager.Status.cs), 포켓몬별 상태는 [BattlePokemon](Server/scripts/BattlePokemon.cs)에 있습니다.
+DB의 `StatusCondition`·`MoveStatusEffect`에 있는 8종을 구현했습니다. 기술 실행과 상태이상 처리는 [Battle.Status.cs](Server/scripts/Battle/Battle.Status.cs), 포켓몬별 상태는 [BattlePokemon](Server/scripts/Battle/BattlePokemon.cs)에 있습니다.
 
 | 상태 | 교체 시 | 효과 |
 | --- | --- | --- |
@@ -400,7 +402,7 @@ DB의 `StatusCondition`·`MoveStatusEffect`에 있는 8종을 구현했습니다
 
 ### 공격기 추가 효과 (6세대 규칙)
 
-DB의 `MoveMeta`·`MoveStatChange`를 읽어 `RoomManager.UseDamagingMove`([RoomManager.Status.cs](Server/scripts/RoomManager.Status.cs))에서 처리합니다. 추가 효과는 실패해도 따로 알리지 않습니다.
+DB의 `MoveMeta`·`MoveStatChange`를 읽어 `Battle.UseDamagingMove`([Battle.Status.cs](Server/scripts/Battle/Battle.Status.cs))에서 처리합니다. 추가 효과는 실패해도 따로 알리지 않습니다.
 
 - **연속기:** 2~5회 기술은 2·3회 각 1/3, 4·5회 각 1/6. 두번차기 등은 2회 고정. 명중 판정은 첫 타만 하고, 급소는 타격마다 판정합니다. 기록은 `3번 맞았다! (12 + 급소 21 + 13 데미지)`처럼 남습니다. 트리플킥은 타격마다 명중 판정을 하고 위력이 10·20·30으로 오릅니다.
 - **상대 능력치 하락:** 사이코키네시스(10% 특방 -1), 로킥(스피드 -1) 등. 확률은 기술당 한 번 판정하고, 상대가 쓰러졌거나 대타가 맞았거나 흰안개가 있으면 없습니다.
@@ -412,7 +414,7 @@ DB의 `MoveMeta`·`MoveStatChange`를 읽어 `RoomManager.UseDamagingMove`([Room
 
 ### 위력이 바뀌는 공격기·정해진 데미지 (6세대 규칙)
 
-[RoomManager.Power.cs](Server/scripts/RoomManager.Power.cs)에 있습니다. 위력은 `BasePower`, 정해진 데미지는 `FixedDamage`가 계산합니다.
+[Battle.Power.cs](Server/scripts/Battle/Battle.Power.cs)에 있습니다. 위력은 `BasePower`, 정해진 데미지는 `FixedDamage`가 계산합니다.
 
 - **조건이 맞으면 위력 2배:** 객기(자신이 화상·독·마비), 병상첨병(상대 상태이상), 베놈쇼크(상대 독), 정신차리기(상대 마비, 맞히면 마비가 풀림), 잠깨움뺨치기(상대 잠듦, 맞히면 깨어남), 리벤지·눈사태(이번 턴에 먼저 맞음), 소금물(상대 HP 절반 이하), 보복(상대가 먼저 행동함), 승부굳히기(상대가 이번 턴에 이미 데미지를 입음), 원수갚기(지난 턴에 우리 편이 쓰러짐), 애크러뱃(지닌 도구가 없어서 항상), 크로스플레임·크로스썬더(이번 턴 바로 앞에 짝 기술이 나옴)
 - **따라가때리기:** 상대가 교체하려고 하면 교체하기 전에 위력 2배로 공격합니다. 그 공격으로 쓰러지면 교체하지 않고 턴 끝에 다음 포켓몬을 고릅니다.
@@ -444,7 +446,7 @@ DB의 `MoveMeta`·`MoveStatChange`를 읽어 `RoomManager.UseDamagingMove`([Room
 
 ### 공격기의 특수한 동작 (6세대 규칙)
 
-[RoomManager.Attack.cs](Server/scripts/RoomManager.Attack.cs)에 있습니다.
+[Battle.Attack.cs](Server/scripts/Battle/Battle.Attack.cs)에 있습니다.
 
 - **자폭·대폭발:** 쓰면 빗나가거나 막혀도 자신이 쓰러집니다.
 - **반동으로 쉬기:** 파괴광선·블라스트번·하이드로캐논·하드플랜트·기가임팩트·암석포·시간의포효는 맞히면(대타 포함) 다음 턴에 "공격의 반동으로 움직일 수 없다!"로 쉽니다(`LOCKED`). 빗나가거나 효과가 없으면 쉬지 않습니다.
@@ -474,7 +476,7 @@ DB의 `MoveMeta`·`MoveStatChange`를 읽어 `RoomManager.UseDamagingMove`([Room
 - 6세대 메가진화 48폼(46마리)만 됩니다(`PokemonFormChange`의 `mega`, 폼 번호 10090까지). 리자몽·뮤츠는 X·Y 중 하나를 골라 메가진화합니다. 원시회귀(원시가이오가·원시그란돈)는 지닌 도구가 없는 게임이라 넣지 않았습니다.
 - 한 전투에 한 번, 팀에서 한 마리만 메가진화할 수 있습니다. 변신한 포켓몬은 메가진화할 수 없습니다.
 - 레쿠쟈는 기술 화룡점정을 알고 있어야 메가진화할 수 있습니다(6세대 ORAS, `GameData.MegaRequiredMoveByBaseId`).
-- 메가진화를 고르면 그 턴의 교체가 끝난 뒤, **어느 기술보다도 먼저** 메가진화합니다(6세대, `RoomManager.TryResolveTurn`). 그래서 상대가 더 빨라도 메가진화한 모습으로 맞습니다(예: 메가리자몽X는 비행 타입이 없어져 지진을 맞음). 양쪽 모두 메가진화하면 빠른 쪽부터 합니다.
+- 메가진화를 고르면 그 턴의 교체가 끝난 뒤, **어느 기술보다도 먼저** 메가진화합니다(6세대, `Battle.ResolveTurn`). 그래서 상대가 더 빨라도 메가진화한 모습으로 맞습니다(예: 메가리자몽X는 비행 타입이 없어져 지진을 맞음). 양쪽 모두 메가진화하면 빠른 쪽부터 합니다.
 - 그 턴의 행동 순서는 **메가진화 전 스피드**로 정하고, 다음 턴부터 메가 폼의 스피드를 씁니다(6세대 규칙. 7세대부터는 메가진화한 스피드로 정함). 예: 메가독침붕은 메가진화한 턴에는 원래 스피드로 움직입니다.
 - 상대의 교체에 따라가때리기를 쓰는 포켓몬은 따라가때리기 직전에 메가진화합니다.
 - 메가진화하면 타입·능력치(HP 제외)가 메가 폼 것으로 바뀌고, 교체해도 그 전투가 끝날 때까지 메가 폼으로 남습니다. 특성이 없는 게임이라 메가 폼의 특성은 반영하지 않습니다.
@@ -482,11 +484,11 @@ DB의 `MoveMeta`·`MoveStatChange`를 읽어 `RoomManager.UseDamagingMove`([Room
 
 ### 싱글배틀에서 실패하는 기술
 
-날따름, 분노가루, 도우미, 사이드체인지, 아로마미스트, 자기장조작, 당신먼저, 순서미루기는 선택할 수 있으며 사용하면 "하지만 실패했다!"가 표시됩니다(`FailingMoveIds`). [RoomManager.Status.cs](Server/scripts/RoomManager.Status.cs)
+날따름, 분노가루, 도우미, 사이드체인지, 아로마미스트, 자기장조작, 당신먼저, 순서미루기는 선택할 수 있으며 사용하면 "하지만 실패했다!"가 표시됩니다(`FailingMoveIds`). [Battle.Status.cs](Server/scripts/Battle/Battle.Status.cs)
 
 ### 날씨·필드 (6세대 규칙)
 
-[RoomManager.Field.cs](Server/scripts/RoomManager.Field.cs)에 있습니다. 기술로 만든 날씨·필드는 쓴 턴을 포함해 5턴 동안 이어지고(턴이 끝날 때 줄어듦), 같은 것이 이미 있으면 실패합니다. 날씨와 필드는 하나씩만 있고 새로 만들면 바뀝니다. 전투 화면 맨 윗줄에 `날씨: 비 (4턴)  필드: 그래스필드 (3턴)  트릭룸 (2턴)`처럼 날씨·필드·트릭룸·중력·원더룸·흙놀이·물놀이·페어리록을 남은 턴(쓴 턴 포함, 턴이 끝날 때 줄어듦)과 함께 표시합니다.
+[Battle.Field.cs](Server/scripts/Battle/Battle.Field.cs)에 있습니다. 기술로 만든 날씨·필드는 쓴 턴을 포함해 5턴 동안 이어지고(턴이 끝날 때 줄어듦), 같은 것이 이미 있으면 실패합니다. 날씨와 필드는 하나씩만 있고 새로 만들면 바뀝니다. 전투 화면 맨 윗줄에 `날씨: 비 (4턴)  필드: 그래스필드 (3턴)  트릭룸 (2턴)`처럼 날씨·필드·트릭룸·중력·원더룸·흙놀이·물놀이·페어리록을 남은 턴(쓴 턴 포함, 턴이 끝날 때 줄어듦)과 함께 표시합니다.
 
 | 날씨 | 효과 |
 | --- | --- |
@@ -510,7 +512,7 @@ DB의 `MoveMeta`·`MoveStatChange`를 읽어 `RoomManager.UseDamagingMove`([Room
 
 ### 교체·설치기·묶기 (6세대 규칙)
 
-[RoomManager.Switch.cs](Server/scripts/RoomManager.Switch.cs)에 있습니다.
+[Battle.Switch.cs](Server/scripts/Battle/Battle.Switch.cs)에 있습니다.
 
 - **턴 도중 교체:** 유턴·볼트체인지(맞히면, 대타가 맞거나 상대가 쓰러져도), 막말내뱉기(상대 공격·특수공격 -1 뒤, 능력치가 내려가지 않아도), 배턴터치를 쓰면 서버가 턴 처리를 멈추고 `CHOOSE_SWITCH_MIDTURN`을 보냅니다. 고른 포켓몬과 교체한 뒤 남은 턴(상대의 행동, 턴 끝 처리)을 이어서 진행합니다. 교체 막기·묶기에 걸려 있어도 교체할 수 있습니다. 교체할 포켓몬이 없으면 교체하지 않습니다(배턴터치는 실패).
 - **강제 교체:** 울부짖기·날려버리기(우선도 -6, 방어·대타를 무시)는 상대의 남은 포켓몬 중 무작위로 끌어내고, 남은 포켓몬이 없거나 뿌리박기 중이면 실패합니다. 드래곤테일·배대뒤치기는 맞으면(대타가 맞은 것은 제외) 같은 방법으로 끌어냅니다. 끌려 나온 포켓몬은 그 턴에 행동하지 않습니다.
@@ -530,7 +532,7 @@ DB의 `MoveMeta`·`MoveStatChange`를 읽어 `RoomManager.UseDamagingMove`([Room
 
 ### 능력치 랭크·급소·우리 편 효과 (6세대 규칙)
 
-[RoomManager.Stats.cs](Server/scripts/RoomManager.Stats.cs)에 있습니다. 기술의 능력치 변화(칼춤 공격 +2 등)는 DB의 `MoveStatChange`에서 읽습니다([DB 설명](Server/resources/db/README.md) "기술 부가 효과와 능력치 변화"). 능력치만 바꾸는 6세대까지의 변화 기술은 모두 이 데이터로 처리하고, 다른 효과가 함께 있는 기술(비축하기·충전·추억의선물·안개제거 등)은 코드에서 따로 처리합니다. 조건이 붙은 6세대 기술도 구현했습니다: 일구기(땅에 있는 풀 타입 공격·특공 +1)·플라워가드(풀 타입 방어 +1)는 양쪽 포켓몬 중 해당하는 쪽만 올리고 없으면 실패, 베놈트랩은 상대가 독·맹독일 때만 공격·특공·스피드 -1, 지오컨트롤은 한 턴 모은 뒤 특공·특방·스피드 +2(`LOCKED`). 막말내뱉기는 교체 기술, 아로마미스트·자기장조작은 실패하는 기술로 따로 처리합니다(`ConditionalStatMoveIds`).
+[Battle.Stats.cs](Server/scripts/Battle/Battle.Stats.cs)에 있습니다. 기술의 능력치 변화(칼춤 공격 +2 등)는 DB의 `MoveStatChange`에서 읽습니다([DB 설명](Server/resources/db/README.md) "기술 부가 효과와 능력치 변화"). 능력치만 바꾸는 6세대까지의 변화 기술은 모두 이 데이터로 처리하고, 다른 효과가 함께 있는 기술(비축하기·충전·추억의선물·안개제거 등)은 코드에서 따로 처리합니다. 조건이 붙은 6세대 기술도 구현했습니다: 일구기(땅에 있는 풀 타입 공격·특공 +1)·플라워가드(풀 타입 방어 +1)는 양쪽 포켓몬 중 해당하는 쪽만 올리고 없으면 실패, 베놈트랩은 상대가 독·맹독일 때만 공격·특공·스피드 -1, 지오컨트롤은 한 턴 모은 뒤 특공·특방·스피드 +2(`LOCKED`). 막말내뱉기는 교체 기술, 아로마미스트·자기장조작은 실패하는 기술로 따로 처리합니다(`ConditionalStatMoveIds`).
 
 - **랭크:** 공격·방어·특공·특방·스피드·명중률·회피율이 -6~+6. 배율은 +1 ×1.5, +2 ×2 … / -1 ×2/3, -2 ×1/2 …, 명중률·회피율은 +1 ×4/3 … / -1 ×3/4 …. 교체하면 초기화되고, 화면에는 HP 아래에 `공격 +2 스피드 -1`처럼 표시됩니다.
 - **능력치 올리기 (36개 전부):** 칼춤, 나쁜음모, 철벽, 망각술, 고속이동, 그림자분신, 명상, 벌크업, 용의춤, 성장(+1), 껍질깨기(공·특공·스피드 +2, 방어·특방 -1), 코스믹파워, 똬리틀기, 요가포즈, 단단해지기, 작아지기(회피율 +2), 껍질에숨기, 웅크리기, 배리어, 녹기, 각지기, 반딧불(특공 +3), 멀리짖기, 록커트, 방어지령, 손톱갈기, 바디퍼지, 나비춤, 기어체인지, 분발, 코튼가드(방어 +3)
@@ -551,7 +553,7 @@ DB의 `MoveMeta`·`MoveStatChange`를 읽어 `RoomManager.UseDamagingMove`([Room
 
 ### HP 회복 (6세대 규칙)
 
-[RoomManager.Heal.cs](Server/scripts/RoomManager.Heal.cs)에 있습니다. HP가 가득 차 있으면 "하지만 실패했다!"가 나옵니다.
+[Battle.Heal.cs](Server/scripts/Battle/Battle.Heal.cs)에 있습니다. HP가 가득 차 있으면 "하지만 실패했다!"가 나옵니다.
 
 - **최대 HP 50% 회복:** HP회복, 알낳기, 우유마시기, 게으름피우기, 회복지령, 아침햇살·광합성·달빛(쾌청이면 2/3, 비·모래바람·싸라기눈이면 1/4), 날개쉬기(그 턴이 끝날 때까지 비행 타입이 없어짐)
 - **희망사항:** 다음 턴이 끝날 때 그 자리의 포켓몬이 쓴 포켓몬의 최대 HP 절반만큼 회복
@@ -563,7 +565,7 @@ DB의 `MoveMeta`·`MoveStatChange`를 읽어 `RoomManager.UseDamagingMove`([Room
 
 ### 방어·보호 (6세대 규칙)
 
-[RoomManager.Protect.cs](Server/scripts/RoomManager.Protect.cs)에 있습니다.
+[Battle.Protect.cs](Server/scripts/Battle/Battle.Protect.cs)에 있습니다.
 
 - **방어·판별** (우선도 +4): 그 턴에 상대를 노리는 기술을 막습니다. 버티기·패스트가드와 연속 사용 횟수를 함께 세며, 연속으로 쓰면 성공 확률이 1/3, 1/9 … 로 줄어듭니다. 그 턴에 마지막으로 행동하면(예: 상대가 교체) 실패합니다.
 - **버티기** (우선도 +4): 그 턴에 쓰러질 공격을 맞아도 HP 1로 버팁니다.
@@ -582,7 +584,7 @@ DB의 `MoveMeta`·`MoveStatChange`를 읽어 `RoomManager.UseDamagingMove`([Room
 
 ### 기술 제한·지속 효과·타입·다른 기술 쓰기 (6세대 규칙)
 
-[RoomManager.Effect.cs](Server/scripts/RoomManager.Effect.cs)와 [RoomManager.Copy.cs](Server/scripts/RoomManager.Copy.cs)에 있습니다. 여기 있는 효과는 교체하면 풀립니다(배턴터치로 넘기는 것 제외, "능력치 랭크·급소·우리 편 효과"의 배턴터치 참고).
+[Battle.Effect.cs](Server/scripts/Battle/Battle.Effect.cs)와 [Battle.Copy.cs](Server/scripts/Battle/Battle.Copy.cs)에 있습니다. 여기 있는 효과는 교체하면 풀립니다(배턴터치로 넘기는 것 제외, "능력치 랭크·급소·우리 편 효과"의 배턴터치 참고).
 
 - **기술 제한:** 쓸 수 없는 기술을 고르면 서버가 `ERROR 도발 때문에 칼춤을 쓸 수 없습니다.`를 보내고 다시 고르게 합니다. 고른 뒤에 걸리면(상대가 먼저 도발함) 그 턴에 "도발 때문에 칼춤을 쓸 수 없다!"로 기술이 나가지 않습니다.
 
@@ -622,7 +624,7 @@ DB의 `MoveMeta`·`MoveStatChange`를 읽어 `RoomManager.UseDamagingMove`([Room
 
 ### 선택 제한시간
 
-[RoomManager.Timer.cs](Server/scripts/RoomManager.Timer.cs)에 있습니다.
+[RoomManager.Timer.cs](Server/scripts/Single/RoomManager.Timer.cs)에 있습니다.
 
 | 선택 | 제한시간 | 넘기면 |
 | --- | --- | --- |
@@ -639,7 +641,7 @@ DB의 `MoveMeta`·`MoveStatChange`를 읽어 `RoomManager.UseDamagingMove`([Room
 
 ### 항복·재도전·나가기
 
-[RoomManager.cs](Server/scripts/RoomManager.cs)의 `Surrender`, `RequestRematch`, `LeaveRoom`에 있습니다.
+[RoomManager.Single.cs](Server/scripts/Single/RoomManager.Single.cs)의 `Surrender`·`RequestRematch`와 [RoomManager.cs](Server/scripts/Lobby/RoomManager.cs)의 `LeaveRoom`에 있습니다.
 
 - **항복과 나가기는 같은 결과입니다.** 전투 중에 항복(`SURRENDER`)하면 상대가 이기고, 양쪽 모두 결과 화면으로 갑니다. 항복한 쪽도 결과 화면에서 재도전을 신청할 수 있습니다.
 - 전투가 시작된 뒤 상대가 나가거나(`LEAVE`) 연결이 끊기면 항복으로 처리해 남은 쪽에 `BATTLE_END WIN LEFT`를 보냅니다. 남은 플레이어가 방장이 되고, 다른 플레이어는 이 방에 들어올 수 없습니다. 상대가 없으므로 재도전할 수 없고, 나가기를 고르면 방이 닫힙니다.
@@ -659,6 +661,8 @@ python tests/run_all.py
 - 서버를 `tests/.build/server`에 빌드한 뒤 묶음을 차례로 실행하고, 묶음마다 `이름 PASS n FAIL m` 한 줄을 출력합니다. 끝에 `전체: 통과` 또는 `전체: 실패 k개 묶음`을 출력하며, 하나라도 실패하면 종료 코드 1입니다. 자세한 결과는 `tests/.out/<이름>.txt`에 남습니다.
 - 일부만 실행: `python tests/run_all.py --only attack,field` (묶음 파일 이름에서 `_test`를 뺀 이름)
 - 다시 빌드하지 않고 실행: `python tests/run_all.py --skip-build`
+- 녹화 비교까지: `python tests/run_all.py --replay`. 시드를 고정한 대본 대전 13개(`tests/replay/scenarios.py`)에서 서버가 보낸 메시지가 기준(`tests/replay/baseline/`)과 한 글자도 다르지 않은지 봅니다. 전투 코드를 옮기거나 정리한 뒤 1:1 동작이 그대로인지 확인할 때 씁니다. 동작을 일부러 바꿨다면 `python tests/replay/replay.py record tests/.build/server/Server.exe`로 기준을 다시 녹화합니다.
+- 테스트용 서버 인자: `Server.exe <포트> --seed <정수>`(방마다 무작위 고정), `--action-seconds <초>`(행동 선택 제한시간).
 - 전체 실행에는 몇 분 걸립니다. Python 3와 .NET SDK가 필요합니다.
 
 ## 남은 작업
