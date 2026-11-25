@@ -1,6 +1,6 @@
 # 전투 엔진 분리 구현 계획
 
-> **중단 (2026-11-25):** Task 1~3(테스트 이전, 테스트 수정, `--seed`)만 완료했고 Task 4~10은 취소했다. 영인이 엔진 분리 대신 전투 코드를 2:2용으로 복사하는 방식으로 바꿨다. 설계 문서 맨 위 변경 사항 참고.
+> **실행 방식 변경 (2026-11-25):** Task 1~3은 서브에이전트로 완료. Task 4부터는 직접 실행하고, Task 5~10은 단계마다 빌드만 확인한 뒤 마지막에 `run_all.py --replay`와 최종 검토를 한 번 한다(영인 요청). Task 4에 테스트 전용 `--action-seconds` 인자를 더해 시간 초과 대본을 짧게 한다.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 

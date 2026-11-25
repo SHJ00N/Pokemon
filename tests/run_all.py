@@ -12,6 +12,7 @@ SUITE_TIMEOUT = 15 * 60   # 묶음 하나의 제한 시간(초)
 ap = argparse.ArgumentParser()
 ap.add_argument("--only", default="", help="실행할 묶음 이름(쉼표로 구분). 예: attack,field")
 ap.add_argument("--skip-build", action="store_true", help="서버를 다시 빌드하지 않는다")
+ap.add_argument("--replay", action="store_true", help="묶음을 돌린 뒤 녹화 비교(tests/replay/replay.py check)도 한다")
 args = ap.parse_args()
 
 if not args.skip_build:
@@ -61,6 +62,11 @@ for path in suites:
         note += " (PASS/FAIL 줄 없음)"
     print(f"{name} PASS {n_pass} FAIL {n_fail}{note}", flush=True)
     if not code_ok or n_fail or n_pass + n_fail == 0:
+        failed += 1
+
+if args.replay:
+    r = subprocess.run([sys.executable, "-I", os.path.join(TESTS, "replay", "replay.py"), "check", exe])
+    if r.returncode != 0:
         failed += 1
 
 print("전체: 통과" if not failed else f"전체: 실패 {failed}개 묶음")
