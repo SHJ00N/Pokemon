@@ -85,10 +85,13 @@ class Battle:
     def begin(self):
         host, guest = self.host, self.guest
         guest.send(str(self.room)); guest.read_until("JOINED")
-        host.send("1"); guest.send("1")
+        # 먼저 보낸 쪽의 처리가 끝난 뒤에 보낸다. 동시에 보내면 서버에 먼저 닿는 쪽에 따라 READY/PLAYER_READY 순서가 바뀐다.
+        host.send("1"); host.read_until("READY"); guest.read_until("PLAYER_READY")
+        guest.send("1")
         host.read_until("POKEMON_CATALOG"); guest.read_until("POKEMON_CATALOG")
         team = "SELECT_TEAM " + json.dumps(TEAM, separators=(",", ":"))
-        host.send(team); guest.send(team)
+        host.send(team); host.read_until("SELECTION_ACCEPTED")
+        guest.send(team)
         guest.read_until(PROMPTS + ("ERROR",)); host.read_until(PROMPTS + ("ERROR",))
 
     def turn(self):
