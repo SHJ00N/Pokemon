@@ -20,9 +20,14 @@ class Program
         // db 조회 및 게임 데이터 목록 생성
         string databasePath = Path.Combine(AppContext.BaseDirectory, "resources", "db", "Pokemon.db");
         GameData data = GameData.Load(databasePath);
-        // 사용: Server.exe [포트] [--seed 정수]. 시드가 있으면 방마다 무작위가 고정된다.
-        int? seed = args.Length >= 3 && args[1] == "--seed" ? int.Parse(args[2]) : null;
-        var rooms = new RoomManager(data, seed);
+        // 사용: Server.exe [포트] [--seed 정수] [--action-seconds 초]. 두 옵션은 테스트용이다.
+        // 시드가 있으면 방마다 무작위가 고정되고, --action-seconds는 턴마다 행동 선택 제한시간을 바꾼다.
+        int? Option(string name)
+        {
+            int index = Array.IndexOf(args, name);
+            return index >= 0 && index + 1 < args.Length ? int.Parse(args[index + 1]) : null;
+        }
+        var rooms = new RoomManager(data, Option("--seed"), Option("--action-seconds") ?? RoomManager.ActionTimeLimitSeconds);
         _ = rooms.RunTimersAsync();     // 선택 제한시간 확인
         Console.WriteLine(
             $"Loaded {data.PokemonById.Count} Pokemon, {data.TypesById.Count} types, " +

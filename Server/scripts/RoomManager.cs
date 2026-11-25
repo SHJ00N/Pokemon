@@ -19,11 +19,13 @@ partial class RoomManager
     private readonly HashSet<string> nicknames = new();     // 접속 중인 플레이어의 닉네임 (중복 금지)
     private int nextRoomId = 1000;
     private readonly int? seed;                     // 있으면 방마다 new Random(seed + 방 번호)
+    private readonly int actionTimeLimitSeconds;    // 턴마다 행동 선택 제한시간. 테스트에서만 기본값(60초)을 바꾼다.
 
-    public RoomManager(GameData data, int? seed = null)
+    public RoomManager(GameData data, int? seed = null, int actionTimeLimitSeconds = ActionTimeLimitSeconds)
     {
         this.data = data;
         this.seed = seed;
+        this.actionTimeLimitSeconds = actionTimeLimitSeconds;
         // 전국도감 905번까지 팀에 넣을 수 있는 폼만 보낸다. 폼 번호가 아닌 종 번호로 제한한다.
         var selectable = data.PokemonById.Values
             .Where(IsTeamSelectable)
@@ -456,7 +458,7 @@ partial class RoomManager
             }
         }
         SendPrompts(room);
-        room.ActionDeadline = Deadline(ActionTimeLimitSeconds);   // 클라이언트도 안내를 받은 순간부터 센다.
+        room.ActionDeadline = Deadline(actionTimeLimitSeconds);   // 클라이언트도 안내를 받은 순간부터 센다.
         TryResolveTurn(room);   // 양쪽 모두 고정되어 있으면 바로 진행한다.
     }
 
@@ -556,7 +558,7 @@ partial class RoomManager
             if (side.SwitchingMidTurn)
             {
                 SendPrompts(room);
-                room.ActionDeadline = Deadline(ActionTimeLimitSeconds);
+                room.ActionDeadline = Deadline(actionTimeLimitSeconds);
                 return;
             }
         }
