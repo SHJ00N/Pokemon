@@ -6,7 +6,14 @@ out = io.open(out_path, "w", encoding="utf-8")
 port = 5086
 server = subprocess.Popen([exe, str(port)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 import atexit; atexit.register(server.kill)
-time.sleep(3)
+for _ in range(75):  # 서버가 포트를 열 때까지 0.2초마다 확인(최대 15초)
+    try:
+        socket.create_connection(("127.0.0.1", port), timeout=1).close()
+        break
+    except OSError:
+        time.sleep(0.2)
+else:
+    raise SystemExit(f"서버가 15초 안에 포트 {port}를 열지 않았다")
 con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
 failures = []
 PROMPTS = ("CHOOSE_ACTION", "CHOOSE_SWITCH", "WAIT_SWITCH", "LOCKED", "BATTLE_END")
@@ -173,7 +180,7 @@ for m in FAILING:
     check(ok, f"{name(m)}: {[l for l in hl if name(m) in l or '실패' in l]}")
     tested += 1
 p(f"   배울 수 있는 포켓몬이 없어 건너뜀: {skipped}")
-check(tested >= 18, f"{tested}개 확인")
+check(tested == len(FAILING), f"{tested}개 확인")
 
 p("\n[2] 마지막수단")
 if 376 in learnable:

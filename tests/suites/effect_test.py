@@ -6,7 +6,14 @@ out = io.open(out_path, "w", encoding="utf-8")
 port = 5083
 server = subprocess.Popen([exe, str(port)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 import atexit; atexit.register(server.kill)
-time.sleep(3)
+for _ in range(75):  # 서버가 포트를 열 때까지 0.2초마다 확인(최대 15초)
+    try:
+        socket.create_connection(("127.0.0.1", port), timeout=1).close()
+        break
+    except OSError:
+        time.sleep(0.2)
+else:
+    raise SystemExit(f"서버가 15초 안에 포트 {port}를 열지 않았다")
 con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
 failures = []
 PROMPTS = ("CHOOSE_ACTION", "CHOOSE_SWITCH", "WAIT_SWITCH", "LOCKED", "BATTLE_END")
@@ -283,8 +290,10 @@ play(host, guest, "USE_MOVE 1", gnoop)
 (hl, _), _ = play(host, guest, "USE_MOVE 2", gnoop)
 check(has(hl, "일격필살") and host.opp()["CurrentHp"] == 0, f"{name(lock)} 다음 턴 {name(ohko)}이(가) 반드시 맞음")
 
-a = learner([193], extra=lambda ls: any(m in plain and MTYPE[m] == TYPES["노말"] for m in ls))
-nhit = next(m for m in learnset(a) if m in plain and MTYPE[m] == TYPES["노말"])
+TYPE_CHANGERS = {237, 311, 363, 449, 546}   # 잠재파워·웨더볼·자연의은혜·심판의뭉치·테크노버스터: 사용할 때 타입이 바뀐다
+normal_hit = lambda m: m in plain and MTYPE[m] == TYPES["노말"] and m not in TYPE_CHANGERS
+a = learner([193], extra=lambda ls: any(normal_hit(m) for m in ls))
+nhit = next(m for m in learnset(a) if normal_hit(m))
 d = learner(with_type="고스트", exclude=[a], order="base_hp DESC")
 host, guest, hnoop, gnoop = battle(a, [193, nhit], d, [])
 (hl, _), _ = play(host, guest, "USE_MOVE 2", gnoop)
@@ -373,10 +382,11 @@ immune = any(name(89) in l and "효과가 없는" in l for l in hl)
 play(host, guest, "USE_MOVE 1", gnoop)
 (hl, _), _ = play(host, guest, "USE_MOVE 2", gnoop)
 check(immune and any(name(89) in l and "데미지)" in l for l in hl), "떨어뜨리기 후 비행 타입에게 지진이 맞음")
-a = learner([206]); d = learner(exclude=[a], order="base_hp ASC", without_types=["고스트"])
+a = learner([206]); d = learner(exclude=[a], order="base_hp + base_defense ASC", without_types=["고스트"])
 host, guest, hnoop, gnoop = battle(a, [206], d, [])
-for _ in range(10):
+for _ in range(6):
     play(host, guest, "USE_MOVE 1", gnoop)
+    if host.opp()["CurrentHp"] == 1: break
 check(host.opp()["CurrentHp"] == 1, f"칼등치기는 HP 1을 남김 ({host.opp()['CurrentHp']})")
 a = learner([253], without_types=["풀", "고스트"]); d = learner([147], exclude=[a], order="base_hp DESC")
 host, guest, hnoop, gnoop = battle(a, [253], d, [147])

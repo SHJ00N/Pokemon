@@ -6,7 +6,14 @@ out = io.open(out_path, "w", encoding="utf-8")
 port = 5080
 server = subprocess.Popen([exe, str(port)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 import atexit; atexit.register(server.kill)
-time.sleep(3)
+for _ in range(75):  # 서버가 포트를 열 때까지 0.2초마다 확인(최대 15초)
+    try:
+        socket.create_connection(("127.0.0.1", port), timeout=1).close()
+        break
+    except OSError:
+        time.sleep(0.2)
+else:
+    raise SystemExit(f"서버가 15초 안에 포트 {port}를 열지 않았다")
 con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
 failures = []
 PROMPTS = ("CHOOSE_ACTION", "CHOOSE_SWITCH", "WAIT_SWITCH", "LOCKED", "BATTLE_END")
@@ -142,6 +149,21 @@ def try_move(pl, slot):
         pl.buf = pl.buf.split(b"\n", 1)[1]
         return False
     return True
+
+def error_of(pl, command):
+    pl.send(command)
+    pl.sock.settimeout(0.5)
+    try:
+        while b"\n" not in pl.buf:
+            pl.buf += pl.sock.recv(65536)
+    except socket.timeout:
+        pass
+    finally:
+        pl.sock.settimeout(8.0)
+    if pl.buf.startswith(b"ERROR"):
+        line, pl.buf = pl.buf.split(b"\n", 1)
+        return line.decode("utf-8")
+    return None
 
 def own_fail(lines):
     """자기 쪽 기술 바로 뒤의 "하지만 실패했다" (상대 기술의 실패는 제외)"""
@@ -329,8 +351,10 @@ a = learner([356]); d = learner([19], exclude=[a], order="base_hp DESC")
 host, guest, hnoop, gnoop = battle(a, [356], d, [19])
 (hl, _), _ = play(host, guest, "USE_MOVE 1", gnoop)
 check(has(hl, "중력이 강해졌다") and host.state["FieldEffects"] == ["중력 (4턴)"], f"중력 시작, 화면 정보 ({host.state['FieldEffects']})")
-(hl, gp), (gl, _) = play(host, guest, hnoop, "USE_MOVE 1")
-check(has(gl, "중력 때문에") and not has(gl, "날아올랐다"), "중력 중에는 공중날기 실패")
+e = error_of(guest, "USE_MOVE 1")
+check(e is not None and "중력" in e, f"중력 중에는 공중날기를 고를 수 없다 ({e})")
+check(guest.state["Team"][guest.state["Active"]]["Moves"][0]["BlockedByGravity"] is True, "BATTLE_STATE에 공중날기 BlockedByGravity=true")
+(hl, gp), (gl, _) = play(host, guest, hnoop, gnoop)
 try:
     a = learner([356, 89]); eq = 89
     d = learner(with_type="비행", exclude=[a], order="base_hp DESC")
