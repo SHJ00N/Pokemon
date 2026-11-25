@@ -5,15 +5,22 @@ sealed class InGameState : ClientState
 {
     public override bool HandleCommand(ClientSession session, RoomManager rooms, string command)
     {
-        // USE_MOVE <기술 슬롯 1~4> [MEGA]. 턴 도중 교체할 포켓몬은 SWITCH로 고른다.
+        // USE_MOVE <기술 슬롯 1~4> [MEGA [폼 ID]]. 턴 도중 교체는 SWITCH로 고른다.
         if (command.StartsWith("USE_MOVE "))
         {
-            string[] parts = command.Split(' ', 3);
-            bool megaEvolve = parts.Length == 3 && parts[2] == "MEGA";
-            if (!int.TryParse(parts[1], out int slot) || slot is < 1 or > PokemonSelection.MaxMoves || (parts.Length == 3 && !megaEvolve))
+            string[] parts = command.Split(' ', 4);
+            if (!int.TryParse(parts[1], out int slot) || slot is < 1 or > PokemonSelection.MaxMoves)
                 session.QueueMessage("ERROR 기술 번호는 1~4입니다.");
+            else if (parts.Length == 2)
+                rooms.UseMove(session, slot);
             else
-                rooms.UseMove(session, slot, megaEvolve);
+            {
+                int formId = 0;
+                if (parts[2] != "MEGA" || (parts.Length == 4 && (!int.TryParse(parts[3], out formId) || formId <= 0)))
+                    session.QueueMessage("ERROR 메가진화 요청 형식이 올바르지 않습니다.");
+                else
+                    rooms.UseMove(session, slot, megaEvolve: true, megaFormId: parts.Length == 4 ? formId : null);
+            }
             return true;
         }
 

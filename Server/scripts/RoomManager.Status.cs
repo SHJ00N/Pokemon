@@ -92,7 +92,7 @@ partial class RoomManager
             move = user.ChargingMove!;
         // 기술을 고른 뒤에 사용 제한이 생기거나 PP가 바닥났을 수 있다.
         bool startsMove = !continuing && user.LockedSlot == null;
-        if (ppSlot != null && startsMove && MoveBlockedBy(attacker, defender, slot) is string cause)
+        if (ppSlot != null && startsMove && MoveBlockedBy(room, attacker, defender, slot) is string cause)
         {
             LogPokemon(room, attacker, $"{subject} {cause} 때문에 {WithJosa(move.Name, "을", "를")} 쓸 수 없다!");
             return;
@@ -122,6 +122,12 @@ partial class RoomManager
                 return;
             move = called;
         }
+        // 잠꼬대 등으로 불러온 기술에도 중력 제한을 적용한다.
+        if (IsBlockedByGravity(room, move))
+        {
+            LogPokemon(room, attacker, $"{subject} 중력 때문에 {WithJosa(move.Name, "을", "를")} 쓸 수 없다!");
+            return;
+        }
         user.LastExecutedMove = room.LastExecutedMove = move;
         // 분진: 불꽃 기술을 쓰려 하면 폭발해서 최대 HP의 1/4 데미지를 받고 기술은 실패한다.
         if (user.Powdered && HasTypeName(AdjustMove(room, user, move).TypeId, "불꽃"))
@@ -130,12 +136,6 @@ partial class RoomManager
             LogPokemon(room, attacker, $"{user.Info.Name}의 {move.Name}!");
             LogBoth(room, attacker, $"분진이 폭발했다! ({damage} 데미지)");
             DealDamage(room, attacker, damage);
-            return;
-        }
-        // 중력 중에는 공중에 뜨거나 뛰어오르는 기술을 쓸 수 없다.
-        if (room.GravityTurns > 0 && GravityBannedMoveIds.Contains(move.Id))
-        {
-            LogPokemon(room, attacker, $"{subject} 중력 때문에 {WithJosa(move.Name, "을", "를")} 쓸 수 없다!");
             return;
         }
         // 참기: 참는 턴이면 여기서 끝나고, 돌려줄 차례면 아래에서 공격으로 처리한다.
