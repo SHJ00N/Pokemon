@@ -211,7 +211,8 @@ partial class Battle
             if (pokemon.Hp == 0 || pokemon.BoundBy is not BattlePokemon binder)
                 continue;
             string subject = WithJosa(pokemon.Info.Name, "은", "는");
-            if (!ReferenceEquals(binder, DefaultTarget(side).Current) || binder.Hp == 0)
+            // 묶은 포켓몬이 상대 편 어느 자리에도 나와 있지 않으면(교체됨) 풀린다. IsTrapped와 같은 판정
+            if (!OpposingSide(side.Side).Slots.Any(foe => ReferenceEquals(foe.Current, binder)) || binder.Hp == 0)
             {
                 pokemon.BoundBy = null;
                 continue;

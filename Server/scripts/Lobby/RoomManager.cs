@@ -6,26 +6,19 @@ using Pokemon.Protocol;
 partial class RoomManager
 {
     private const int TeamSize = 3;
-
     private const int MaxNicknameLength = 8;
-
     private const int MaxSelectableSpeciesId = 905;
-
     // 지금은 팀에 넣을 수 없는 종: 루브도(스케치는 2대2 대전에서 쓸모가 있어 그때 연다), 안농. 목록에도 보내지 않는다.
     private static readonly HashSet<int> BlockedSpeciesIds = [235, 201];
 
     private readonly GameData data;
-
     private readonly string catalogMessage;     // POKEMON_CATALOG <Brotli로 압축한 JSON의 Base64>
     public int CatalogJsonBytes { get; }        // 압축 전 JSON 크기
     public int CatalogMessageBytes => catalogMessage.Length + 1;   // 실제로 보내는 크기 (ASCII, 줄바꿈 포함)
     private readonly object roomsLock = new();
-
     private readonly Dictionary<int, GameRoom> rooms = new();
-
     private readonly HashSet<string> nicknames = new();     // 접속 중인 플레이어의 닉네임 (중복 금지)
     private int nextRoomId = 1000;
-
     private readonly int? seed;                     // 있으면 방마다 new Random(seed + 방 번호)
     private readonly int actionTimeLimitSeconds;    // 턴마다 행동 선택 제한시간. 테스트에서만 기본값(60초)을 바꾼다.
 

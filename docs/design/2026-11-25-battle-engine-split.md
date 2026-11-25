@@ -133,3 +133,12 @@ Server/scripts/
 **다음 프로젝트(2:2 AI 대전)에서 정할 것**
 - 기술 대상 정보(상대 하나 / 상대 모두 / 자기 편 포함 / 아군)를 DB에 추가하는 방법 (`build_db.py`, DB 담당 팀원과 협의).
 - AI 팀 구성 규칙의 세부, AI의 기술·대상 선택, 교체 시점, 연승·랭킹 저장, 팀원이 나갔을 때 처리, 더블 화면 배치.
+
+**발견한 것: 엔진에 남은 1:1 전용 가정 (2:2에서 손볼 곳)**
+
+엔진은 자리 여러 개를 담을 수 있지만, 아래는 아직 "상대는 한 명, 내 편 자리는 하나"를 전제로 한다. 1:1에서는 모두 올바르다(녹화 13/13 같음).
+- `DefaultTarget`(상대 편 첫 자리)을 "그 상대"로 쓰는 곳: 기술 대상(`Battle.cs`의 `ContinueTurn`), 따라가때리기, 씨뿌리기 회복 대상(`Battle.Effect.cs`, 주석은 "씨를 심은 쪽 자리"), 미래예지를 쓴 자리(`Battle.Attack.cs`), 중력의 `EndCharging`(`Battle.Field.cs`).
+- 프리폴 해제(`ReleaseSkyDrop`, `Battle.Attack.cs`)는 상대 편 첫 자리가 붙잡고 있는지만 본다. 누가 붙잡았는지 기억하는 값(`TrappedBy`처럼 `SkyDroppedBy`)을 두고 그 포켓몬이 상대 편에 나와 있는지 봐야 한다. (묶기 해제 `TickBinding`은 상대 편 모든 자리를 보도록 고쳤다.)
+- 교체 후보: `HasBench`·`ForceSwitch`·`Faint`의 `MustSwitch` 판정·시간 초과 자동 교체가 "이 자리의 `Active`만 빼고 팀 전체"를 본다. 2:2에서는 짝 자리에 나와 있는 포켓몬을 빼고, 자기 플레이어의 `TeamIndices` 안에서만 골라야 한다. 한곳(예: `Bench(BattleSlot)`)으로 모아 두면 한 번에 고칠 수 있다.
+- 화면: 엔진 안 여러 곳에서 부르는 `SendBattleState`가 1:1 `BattleView`(편의 첫 자리 기준)를 직접 만든다. 2:2 화면을 위해 모드가 화면 만들기를 바꿔 끼울 연결점이 필요하다.
+- 안내(`SendPrompts`)·`TryGetBattle`·타이머는 `Single/`에 있고 편의 첫 자리 기준이다(1:1 모드 코드라 의도된 것).
