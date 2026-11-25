@@ -87,7 +87,7 @@ partial class RoomManager
             {
                 BattleSide other = GetOther(room, side);
                 int[] available = Enumerable.Range(1, side.Current.Moves.Length)
-                    .Where(slot => MoveBlockedBy(side, other, slot) == null).ToArray();
+                    .Where(slot => MoveBlockedBy(room, side, other, slot) == null).ToArray();
                 side.Struggling = available.Length == 0;
                 int slot = side.Struggling ? 1 : available[Random.Shared.Next(available.Length)];
                 side.ChosenMove = slot;

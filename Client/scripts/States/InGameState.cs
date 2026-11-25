@@ -30,7 +30,7 @@ sealed class InGameState : ClientState
 
     // 전투 중 입력 단계
     // MoveSwitch: 유턴·볼트체인지·막말내뱉기·배턴터치를 쓴 뒤 턴 도중에 교체할 포켓몬을 고른다(CHOOSE_SWITCH_MIDTURN).
-    private enum BattleMenu { Waiting, Main, Fight, Switch, ForcedSwitch, MoveSwitch, Surrender }
+    private enum BattleMenu { Waiting, Main, Fight, MegaEvolution, Switch, ForcedSwitch, MoveSwitch, Surrender }
 
     protected override string Menu => "\n[게임 중]";
     private PokemonCatalogResponse? catalog;
@@ -49,7 +49,7 @@ sealed class InGameState : ClientState
 
     private BattleView? battle;
     private bool withdrawingPlayer;
-    private bool megaEvolutionSelected;
+    private MegaFormView? selectedMegaForm;
     private BattleMenu menu = BattleMenu.Waiting;
     private BattleMenu menuBeforeWaiting = BattleMenu.Main;  // 서버가 선택을 거절하면 돌아갈 단계
     private BattleMenu menuBeforeSurrender = BattleMenu.Main; // 항복 확인에서 뒤로 가면 돌아갈 단계
@@ -92,10 +92,11 @@ sealed class InGameState : ClientState
             Notice: Notification, Log: battleLog.ToArray(), Prompt: GetPrompt(),
             Switches: menu is BattleMenu.Switch or BattleMenu.ForcedSwitch or BattleMenu.MoveSwitch ? GetSwitchCandidates() : null,
             Back: menu is BattleMenu.Fight or BattleMenu.Switch,
+            ChoosingMegaForm: menu == BattleMenu.MegaEvolution, SelectedMegaForm: selectedMegaForm,
             Result: result, Seconds: shownSeconds);
         ConsoleRenderThreads.Information(() => InGameRenderer.Draw(
             view.Catalog, view.PokemonList, view.Names, view.Target, view.Moves, view.Submitted, view.Battle, view.Notice,
-            view.Log, view.Prompt, view.Switches, view.Back, view.Result, view.Seconds));
+            view.Log, view.Prompt, view.Switches, view.Back, view.ChoosingMegaForm, view.SelectedMegaForm, view.Result, view.Seconds));
         if (view.Battle != null && view.Result == null)
             QueueBattleFrame(view.Battle, Environment.TickCount64);
     }
@@ -116,6 +117,7 @@ sealed class InGameState : ClientState
     {
         BattleMenu.Main => "행동을 선택하세요. 1. 싸운다 2. 교체 3. 항복: ",
         BattleMenu.Fight => "공격할 기술의 번호를 선택하세요(0 : 취소): ",
+        BattleMenu.MegaEvolution => "메가진화할 폼을 선택하세요(0 : 뒤로): ",
         BattleMenu.Switch => "교체할 포켓몬의 번호를 선택하세요(0 : 취소): ",
         BattleMenu.ForcedSwitch => "포켓몬이 쓰러졌습니다. 내보낼 포켓몬 번호: ",
         BattleMenu.MoveSwitch => "기술 효과로 교체합니다. 내보낼 포켓몬 번호: ",
@@ -238,7 +240,7 @@ sealed class InGameState : ClientState
         }
         if (message is "CHOOSE_ACTION" or "CHOOSE_SWITCH" or "CHOOSE_SWITCH_MIDTURN" or "WAIT_SWITCH" or "LOCKED")
         {
-            megaEvolutionSelected = false;
+            selectedMegaForm = null;
             menu = message switch
             {
                 "CHOOSE_ACTION" => BattleMenu.Main,
@@ -533,6 +535,7 @@ sealed class InGameState : ClientState
     private async Task HandleBattleInput(string input, StreamWriter writer)
     {
         int.TryParse(input, out int number);
+        MegaFormView[] megaForms = battle!.MegaForms ?? [];
         switch (menu)
         {
             case BattleMenu.Main:
@@ -562,24 +565,35 @@ sealed class InGameState : ClientState
                 break;
 
             case BattleMenu.Fight:
-                int moveCount = battle!.Team[battle.Active].Moves.Length;
+                int moveCount = battle.Team[battle.Active].Moves.Length;
                 if (input == "0")
                 {
-                    megaEvolutionSelected = false;
+                    selectedMegaForm = null;
                     menu = BattleMenu.Main;
                 }
-                else if (number == 5 && battle.CanMegaEvolve)
-                {
-                    megaEvolutionSelected = true;
-                    Notification = "메가진화를 예약했습니다. 이어서 사용할 기술을 고르세요.";
-                }
+                else if (number == 5 && megaForms.Length == 1)
+                    selectedMegaForm = megaForms[0];
+                else if (number == 5 && megaForms.Length > 1)
+                    menu = BattleMenu.MegaEvolution;
                 else if (number < 1 || number > moveCount)
                     Notification = $"기술 번호 1~{moveCount}를 입력하세요.";
                 else
                 {
-                    string mega = megaEvolutionSelected && battle.CanMegaEvolve ? " MEGA" : "";
+                    string mega = selectedMegaForm is { } form && megaForms.Contains(form) ? $" MEGA {form.PokemonId}" : "";
                     await writer.WriteLineAsync($"USE_MOVE {number}{mega}");
                     WaitForOpponent();
+                }
+                break;
+
+            case BattleMenu.MegaEvolution:
+                if (input == "0")
+                    menu = BattleMenu.Fight;
+                else if (number < 1 || number > megaForms.Length)
+                    Notification = "목록에 있는 메가진화 폼 번호를 입력하세요.";
+                else
+                {
+                    selectedMegaForm = megaForms[number - 1];
+                    menu = BattleMenu.Fight;
                 }
                 break;
 
@@ -634,7 +648,7 @@ sealed class InGameState : ClientState
 
     private void WaitForOpponent()
     {
-        menuBeforeWaiting = menu is BattleMenu.ForcedSwitch or BattleMenu.MoveSwitch ? menu : BattleMenu.Main;
+        menuBeforeWaiting = menu is BattleMenu.Fight or BattleMenu.ForcedSwitch or BattleMenu.MoveSwitch ? menu : BattleMenu.Main;
         menu = BattleMenu.Waiting;
     }
 

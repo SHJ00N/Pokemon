@@ -23,11 +23,13 @@ static class BattlePanelRenderer
         return Box([markers + pokemon.Name + status, $"HP [{bar}] {pokemon.CurrentHp}/{pokemon.MaxHp}"]);
     }
 
-    public static string[] Moves(IReadOnlyList<MoveView> moves, bool showMega)
+    public static string[] Moves(IReadOnlyList<MoveView> moves, bool showMega, MegaFormView? selectedMegaForm)
     {
         var lines = moves.Select((move, index) =>
         {
             string name = $"{index + 1}. " + TypeColorRenderer.Colorize("■", move.Type.ColorRgb) + " " + move.Name;
+            if (move.BlockedByGravity)
+                name += " (중력 제한)";
             if (move.Pp is not int pp || move.MaxPp is not int maxPp)
                 return name;
             string usage = $"PP {pp}/{maxPp}";
@@ -35,8 +37,9 @@ static class BattlePanelRenderer
             return name + new string(' ', padding) + usage;
         }).ToList();
         if (showMega)
-            lines.Add("5. 메가진화");
-        return Box(lines, moves.Count > 0 && moves.All(move => move.Pp == 0) ? "기술 (선택 시 발버둥)" : "기술");
+            lines.Add(selectedMegaForm == null ? "5. 메가진화" : $"5. 메가진화 예약 ({selectedMegaForm.Name})");
+        return Box(lines, moves.Count > 0 && moves.All(move => move.Pp == 0 || move.BlockedByGravity)
+            ? "기술 (선택 시 발버둥)" : "기술");
     }
 
     public static string[] Switches(BattleView battle, IReadOnlyList<int> candidates, bool showBack)
@@ -56,17 +59,20 @@ static class BattlePanelRenderer
     public readonly record struct Panel(int X, int Y, string[] Lines);
 
     public static Panel[] Arrange(BattleView battle, int width, int statusY,
-        IReadOnlyList<int>? switchList, bool showBack)
+        IReadOnlyList<int>? switchList, bool showBack, bool choosingMegaForm, MegaFormView? selectedMegaForm)
     {
         TeamMemberView active = battle.Team[battle.Active];
         int leftX = 2, rightX = width - Width - 2;
         string[] opponentChanges = StatChanges(battle.Opponent);
         int changesWidth = opponentChanges.Select(TextRenderer.DisplayWidth).DefaultIfEmpty(0).Max();
+        MegaFormView[] megaForms = battle.MegaForms ?? [];
+        string[] actions = switchList != null ? Switches(battle, switchList, showBack)
+            : choosingMegaForm ? Box(megaForms.Select((form, index) => $"{index + 1}. {form.Name}").ToArray(), "메가진화")
+            : Moves(active.Moves, showBack && megaForms.Length > 0, selectedMegaForm);
         return [
             new(leftX, statusY, Pokemon(active.Pokemon)),
             new(rightX, statusY, Pokemon(battle.Opponent)),
-            new(leftX, statusY + 5, switchList == null
-                ? Moves(active.Moves, showBack && battle.CanMegaEvolve) : Switches(battle, switchList, showBack)),
+            new(leftX, statusY + 5, actions),
             new(leftX + Width + 3, statusY + 1, StatChanges(active.Pokemon)),
             new(rightX - changesWidth - 3, statusY + 1, opponentChanges)
         ];

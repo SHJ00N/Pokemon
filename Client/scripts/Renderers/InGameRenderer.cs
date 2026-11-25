@@ -38,12 +38,13 @@ static class InGameRenderer
         (PokemonCatalogEntry[] Entries, int? Generation, string? Type, bool MegaOnly) pokemonList, IReadOnlyList<string> teamNames,
         PokemonCatalogEntry? selectedPokemon, IReadOnlyList<int> selectedMoves, bool submitted,
         BattleView? battle, string? notification, IReadOnlyList<string> battleLog, string prompt,
-        IReadOnlyList<int>? switchList, bool showBack, string? result, int? timerSeconds)
+        IReadOnlyList<int>? switchList, bool showBack, bool choosingMegaForm, MegaFormView? selectedMegaForm,
+        string? result, int? timerSeconds)
     {
         timerColumn = null;
         if (battle != null && result == null)
         {
-            DrawBattle(battle, notification, battleLog, prompt, switchList, showBack, timerSeconds);
+            DrawBattle(battle, notification, battleLog, prompt, switchList, showBack, choosingMegaForm, selectedMegaForm, timerSeconds);
             return;
         }
         TextRenderer.Clear();
@@ -141,7 +142,8 @@ static class InGameRenderer
     }
 
     private static void DrawBattle(BattleView battle, string? notification, IReadOnlyList<string> battleLog,
-        string prompt, IReadOnlyList<int>? switchList, bool showBack, int? timerSeconds)
+        string prompt, IReadOnlyList<int>? switchList, bool showBack, bool choosingMegaForm,
+        MegaFormView? selectedMegaForm, int? timerSeconds)
     {
         int width = Console.BufferWidth;
         int height = Console.BufferHeight;
@@ -166,7 +168,7 @@ static class InGameRenderer
         Console.Write(clearInformation.ToString());
         // 맨 윗줄: 날씨·필드·공간 효과와 남은 턴. 포켓몬 그림은 둘째 줄 아래에 그리므로 겹치지 않는다.
         TextRenderer.At(leftX, 0, TextRenderer.FitToWidth(string.Join("  ", battle.FieldEffects ?? []), width - 4));
-        var panels = BattlePanelRenderer.Arrange(battle, width, statusY, switchList, showBack);
+        var panels = BattlePanelRenderer.Arrange(battle, width, statusY, switchList, showBack, choosingMegaForm, selectedMegaForm);
         foreach (var panel in panels)
             BattlePanelRenderer.Draw(panel.Lines, panel.X, panel.Y);
 
