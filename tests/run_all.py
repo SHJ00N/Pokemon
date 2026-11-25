@@ -7,6 +7,7 @@ BUILD = os.path.join(TESTS, ".build", "server")
 OUT = os.path.join(TESTS, ".out")
 DB = os.path.join(ROOT, "Server", "resources", "db", "Pokemon.db")
 CODE = os.path.join(ROOT, "Server")
+SUITE_TIMEOUT = 15 * 60   # 묶음 하나의 제한 시간(초)
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--only", default="", help="실행할 묶음 이름(쉼표로 구분). 예: attack,field")
@@ -37,12 +38,18 @@ for path in suites:
     if os.path.exists(out_path):
         os.remove(out_path)   # 이전 실행의 결과가 남아 통과로 보이지 않게 한다
     note = ""
+    proc = subprocess.Popen([sys.executable, "-I", path, exe, DB, out_path, CODE])
     try:
-        r = subprocess.run([sys.executable, "-I", path, exe, DB, out_path, CODE], timeout=15 * 60)
-        if r.returncode != 0:
-            note = f" (종료 코드 {r.returncode})"
-        code_ok = r.returncode == 0
+        rc = proc.wait(timeout=SUITE_TIMEOUT)
+        if rc != 0:
+            note = f" (종료 코드 {rc})"
+        code_ok = rc == 0
     except subprocess.TimeoutExpired:
+        # 묶음만 죽이면 atexit가 돌지 않아 서버가 남으므로, 그 묶음의 프로세스 트리를 통째로 종료한다.
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        proc.kill()
+        proc.wait()
         code_ok = False
         note = " (15분 초과)"
     lines = open(out_path, encoding="utf-8").read().splitlines() if os.path.exists(out_path) else []
