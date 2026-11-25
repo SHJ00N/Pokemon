@@ -363,7 +363,11 @@ double multiplier = data.GetMultiplier(move.TypeId, defender.Type1Id);
 
 ### 현재 구현된 전투
 
-- 양쪽 팀 선택이 끝나면 서버가 플레이어마다 [BattleSide](Server/scripts/Battle/BattleSide.cs)(팀, 출전 번호, 이번 턴 선택)를 만들고, 포켓몬마다 [BattlePokemon](Server/scripts/Battle/BattlePokemon.cs)을 만듭니다. 레벨 50, 개체값 31(6V), 노력치 0, 성격 보정 없이 실제 능력치를 계산합니다(HP = 종족값 + 75, 나머지 = 종족값 + 20).
+- 양쪽 팀 선택이 끝나면 서버가 전투 [Battle](Server/scripts/Battle/Battle.cs)을 만듭니다. 전투 규칙(엔진)은 방·접속을 모르고, 1:1 진행([Single](Server/scripts/Single))이 행동을 넘기면 다음 입력이 필요할 때까지 진행한 뒤 기다리는 것(`TurnProgress`)을 돌려줍니다. 전투 하나는 세 단위로 나뉩니다.
+  - 편 [BattleSide](Server/scripts/Battle/BattleSide.cs): 팀 전체, 리플렉터·순풍 같은 편 전체 효과, 압정뿌리기 같은 설치기
+  - 자리 [BattleSlot](Server/scripts/Battle/BattleSlot.cs): 지금 나와 있는 포켓몬과 이번 턴 선택, 희망사항·미래예지처럼 그 자리에 걸린 효과. 1:1은 편마다 한 자리이고, 2:2는 두 자리
+  - 플레이어 [BattlePlayer](Server/scripts/Battle/BattlePlayer.cs): 접속(AI면 없음), 맡은 포켓몬, 메가진화 사용 여부(플레이어마다 한 번)
+- 포켓몬마다 [BattlePokemon](Server/scripts/Battle/BattlePokemon.cs)을 만듭니다. 레벨 50, 개체값 31(6V), 노력치 0, 성격 보정 없이 실제 능력치를 계산합니다(HP = 종족값 + 75, 나머지 = 종족값 + 20).
 - 매 턴 양쪽이 동시에 기술(`RoomManager.UseMove`) 또는 교체(`RoomManager.SwitchPokemon`)를 고릅니다. 둘 다 고르면 `Battle.ResolveTurn`이 교체를 먼저 처리한 뒤, 우선도 → 스피드 → 무작위 순으로 공격합니다. 그래서 상대가 교체하면 공격은 새로 나온 포켓몬이 맞습니다.
 - 이번 턴에 먼저 쓰러진 포켓몬은 공격하지 못합니다. 쓰러진 쪽은 다음 포켓몬을 골라야 하며(`CHOOSE_SWITCH`), 이 교체는 턴을 쓰지 않아 상대가 추가로 공격하지 않습니다. 팀 3마리가 모두 쓰러지면 패배입니다.
 - 전투 규칙은 **6세대 기준**입니다. 데미지는 6세대 공식으로 계산합니다(`Battle.CalculateDamage`). 물리/특수 구분, 타입 상성(듀얼 타입은 곱함), 자속 1.5배, 난수 0.85~1.00, 명중률, 능력치 랭크, 급소, 날씨·필드를 반영합니다. 특성과 지닌 도구는 사용하지 않습니다.
