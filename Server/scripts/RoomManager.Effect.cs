@@ -287,11 +287,12 @@ partial class RoomManager
     }
 
     // 지금 그 슬롯의 기술을 쓸 수 없는 이유. 쓸 수 있으면 null
-    private string? MoveBlockedBy(BattleSide side, BattleSide other, int slot)
+    private string? MoveBlockedBy(GameRoom room, BattleSide side, BattleSide other, int slot)
     {
         BattlePokemon pokemon = side.Current;
         BattleMoveSlot selected = pokemon.Moves[slot - 1];
         PokemonMoveInfo move = selected.Move;
+        if (IsBlockedByGravity(room, move)) return "중력";
         if (selected.Pp == 0) return "PP 부족";
         if (pokemon.DisabledSlot == slot) return "사슬묶기";
         if (pokemon.EncoreTurns > 0 && pokemon.EncoreSlot != slot) return "앙코르";
@@ -303,8 +304,8 @@ partial class RoomManager
     }
 
     // 쓸 수 있는 기술이 하나도 없으면 발버둥을 쓴다.
-    private bool MustStruggle(BattleSide side, BattleSide other) =>
-        Enumerable.Range(1, side.Current.Moves.Length).All(slot => MoveBlockedBy(side, other, slot) != null);
+    private bool MustStruggle(GameRoom room, BattleSide side, BattleSide other) =>
+        Enumerable.Range(1, side.Current.Moves.Length).All(slot => MoveBlockedBy(room, side, other, slot) != null);
 
     // 턴 끝: 씨뿌리기 (화상·독 데미지보다 먼저). 씨를 심은 쪽 자리의 포켓몬이 빼앗은 만큼 회복한다.
     private void TickLeechSeed(GameRoom room, IEnumerable<BattleSide> sides)

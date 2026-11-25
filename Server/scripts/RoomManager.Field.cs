@@ -10,8 +10,8 @@ partial class RoomManager
         BlizzardMoveId = 59, GrowthMoveId = 74;
     // 그래스필드에서 땅에 있는 상대에게 위력이 절반인 기술: 지진, 땅고르기, 매그니튜드
     private static readonly HashSet<int> GroundShakeMoveIds = [89, 523, 222];
-    // 중력 중에는 쓸 수 없는 기술: 공중날기, 뛰어오르기, 프리폴, 점프킥, 무릎차기, 튀어오르기, 전자부유, 텔레키네시스
-    private static readonly HashSet<int> GravityBannedMoveIds = [19, 340, 507, 26, 136, 150, 393, 477];
+    private bool IsBlockedByGravity(GameRoom room, PokemonMoveInfo move) =>
+        room.GravityTurns > 0 && HasFlag(move, "gravity");
 
     // 날씨 기술: 비바라기, 쾌청, 모래바람, 싸라기눈
     private static readonly Dictionary<int, string> WeatherMoves = new() { [240] = Rain, [241] = Sun, [201] = Sand, [258] = Hail };
@@ -178,7 +178,10 @@ partial class RoomManager
             pokemon.MagnetRiseTurns = pokemon.TelekinesisTurns = 0;
             bool flying = pokemon.Hidden == Air && !pokemon.SkyDropped;
             if (flying)
+            {
                 EndCharging(side, GetOther(room, side));
+                room.TurnQueue.Remove(side);
+            }
             if (flying || floating)
                 LogPokemon(room, side, $"{WithJosa(pokemon.Info.Name, "은", "는")} 중력 때문에 떨어졌다!");
         }

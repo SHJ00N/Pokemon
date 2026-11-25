@@ -232,7 +232,7 @@ partial class RoomManager
     }
 
     // slot: 출전 중인 포켓몬이 현재 사용할 수 있는 기술 목록에서 몇 번째인지
-    public void UseMove(ClientSession session, int slot, bool megaEvolve = false)
+    public void UseMove(ClientSession session, int slot, bool megaEvolve = false, int? megaFormId = null)
     {
         lock (roomsLock)
         {
@@ -244,10 +244,21 @@ partial class RoomManager
                 return;
             }
 
-            if (megaEvolve && GetMegaForm(me) == null)
+            PokemonInfo? megaForm = null;
+            if (megaEvolve)
             {
-                session.QueueMessage("ERROR 지금은 메가진화할 수 없습니다.");
-                return;
+                var options = GetMegaForms(me);
+                if (options.Count == 0)
+                {
+                    session.QueueMessage("ERROR 지금은 메가진화할 수 없습니다.");
+                    return;
+                }
+                megaForm = options.FirstOrDefault(form => megaFormId == null || form.Id == megaFormId);
+                if (megaForm == null)
+                {
+                    session.QueueMessage("ERROR 현재 포켓몬이 메가진화할 수 있는 폼을 선택하세요.");
+                    return;
+                }
             }
 
             if (slot < 1 || slot > me.Current.Moves.Length)
@@ -259,9 +270,9 @@ partial class RoomManager
             // PP가 부족하거나 효과로 막힌 기술은 고를 수 없다.
             // 쓸 수 있는 기술이 하나도 없으면 어느 기술을 골라도 발버둥을 쓴다.
             me.Struggling = false;
-            if (MoveBlockedBy(me, other, slot) is string cause)
+            if (MoveBlockedBy(room, me, other, slot) is string cause)
             {
-                if (!MustStruggle(me, other))
+                if (!MustStruggle(room, me, other))
                 {
                     session.QueueMessage($"ERROR {cause} 때문에 {WithJosa(me.Current.Moves[slot - 1].Move.Name, "을", "를")} 쓸 수 없습니다.");
                     return;
@@ -270,17 +281,17 @@ partial class RoomManager
             }
 
             me.ChosenMove = slot;
-            me.MegaEvolutionChosen = megaEvolve;
+            me.ChosenMegaForm = megaForm;
             TryResolveTurn(room);
         }
     }
 
     private void ApplyChosenMegaEvolution(GameRoom room, BattleSide side)
     {
-        if (!side.MegaEvolutionChosen || GetMegaForm(side) is not PokemonInfo form)
+        if (side.ChosenMegaForm is not PokemonInfo form || !GetMegaForms(side).Contains(form))
             return;
 
-        side.MegaEvolutionChosen = false;
+        side.ChosenMegaForm = null;
         string name = side.Current.Info.Name;
         side.Current.MegaEvolve(form);
         side.HasMegaEvolved = true;
@@ -288,14 +299,14 @@ partial class RoomManager
         LogPokemon(room, side, $"{WithJosa(name, "이", "가")} {WithJosa(form.Name, "으로", "로")} 메가진화했다!");
     }
 
-    private PokemonInfo? GetMegaForm(BattleSide side)
+    private IReadOnlyList<PokemonInfo> GetMegaForms(BattleSide side)
     {
         BattlePokemon pokemon = side.Current;
         // 레쿠쟈는 화룡점정을 알고 있어야 메가진화한다(6세대 ORAS).
         bool knowsRequiredMove = !data.MegaRequiredMoveByBaseId.TryGetValue(pokemon.Info.Id, out int requiredMove) ||
             pokemon.Moves.Any(slot => slot.Move.Id == requiredMove);
         return !side.HasMegaEvolved && pokemon.Hp > 0 && !pokemon.Transformed && knowsRequiredMove
-            ? data.MegaFormsByBaseId.GetValueOrDefault(pokemon.Info.Id) : null;
+            ? data.MegaFormsByBaseId.GetValueOrDefault(pokemon.Info.Id) ?? [] : [];
     }
 
     // teamSlot: 교체할 팀 번호 (1~3)
@@ -551,7 +562,7 @@ partial class RoomManager
         EndOfTurn(room);
 
         host.ChosenMove = guest.ChosenMove = null;
-        host.MegaEvolutionChosen = guest.MegaEvolutionChosen = false;
+        host.ChosenMegaForm = guest.ChosenMegaForm = null;
         host.ChosenSwitch = guest.ChosenSwitch = null;
         host.Struggling = guest.Struggling = false;
         SendBattleState(room);
@@ -710,12 +721,17 @@ partial class RoomManager
     {
         foreach (BattleSide side in new[] { room.HostSide!, room.GuestSide! })
         {
-            var team = side.Team.Select(p => new TeamMemberView(GetPokemon(p), p.Moves.Select(GetMove).ToArray()));
+            var team = side.Team.Select(p => new TeamMemberView(GetPokemon(p),
+                p.Moves.Select(slot => GetMove(slot) with
+                {
+                    BlockedByGravity = p == side.Current && IsBlockedByGravity(room, slot.Move)
+                }).ToArray()));
+            MegaFormView[] megaForms = GetMegaForms(side).Select(form => new MegaFormView(form.Id, form.Name)).ToArray();
             string prefix = megaEvolved == null ? "BATTLE_STATE "
                 : megaEvolved == side ? "BATTLE_MEGA SELF " : "BATTLE_MEGA OPPONENT ";
             side.Player.QueueMessage(prefix + JsonSerializer.Serialize(
                 new BattleView(team.ToArray(), side.Active, GetPokemon(GetOther(room, side).Current),
-                    GetFieldEffects(room), GetMegaForm(side) != null, room.Weather, room.Terrain,
+                    GetFieldEffects(room), megaForms.Length > 0, room.Weather, room.Terrain, megaForms,
                     GetSideEffects(side), GetSideEffects(GetOther(room, side)))));
         }
     }

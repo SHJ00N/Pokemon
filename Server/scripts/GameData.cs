@@ -55,7 +55,7 @@ internal sealed class GameData
 {
     // 실행중 변경되지 않는 데이터이므로 FrozenDictionary 사용
     public FrozenDictionary<int, PokemonInfo> PokemonById { get; } // 포켓몬 테이블
-    public FrozenDictionary<int, PokemonInfo> MegaFormsByBaseId { get; }
+    public FrozenDictionary<int, IReadOnlyList<PokemonInfo>> MegaFormsByBaseId { get; }
     public FrozenDictionary<int, int> MegaRequiredMoveByBaseId { get; } // 메가진화하려면 알고 있어야 하는 기술 (레쿠쟈: 화룡점정)
     public FrozenDictionary<int, PokemonTypeInfo> TypesById { get; } // 타입 테이블
     public FrozenDictionary<int, PokemonMoveInfo> MovesById { get; } // 기술 테이블
@@ -79,7 +79,7 @@ internal sealed class GameData
         FrozenDictionary<int, MoveMetaInfo> moveMetaById,
         FrozenDictionary<int, IReadOnlyList<MoveStatChangeInfo>> moveStatChangesByMoveId,
         FrozenDictionary<int, FrozenSet<string>> moveFlagsByMoveId,
-        FrozenDictionary<int, PokemonInfo> megaFormsByBaseId,
+        FrozenDictionary<int, IReadOnlyList<PokemonInfo>> megaFormsByBaseId,
         FrozenDictionary<int, int> megaRequiredMoveByBaseId)
     {
         MoveFlagsByMoveId = moveFlagsByMoveId;
@@ -149,36 +149,37 @@ internal sealed class GameData
     public double GetMultiplier(int attackTypeId, int defendTypeId) =>
         EffectivenessByType[(attackTypeId, defendTypeId)];
 
-    private static FrozenDictionary<int, PokemonInfo> LoadMegaForms(
+    private static FrozenDictionary<int, IReadOnlyList<PokemonInfo>> LoadMegaForms(
         SqliteConnection connection, FrozenDictionary<int, PokemonInfo> pokemon)
     {
         // 기존 이미지가 있는 6세대 메가 폼은 DB에서 메가독침붕(10090)까지다.
-        // 두 폼이 있는 리자몽과 뮤츠는 폼 번호가 작은 X를 기본으로 쓴다.
         const int LastGen6MegaFormId = 10090;
         using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT base_pokemon_id, MIN(pokemon_id)
+            SELECT base_pokemon_id, pokemon_id
             FROM PokemonFormChange
             WHERE method = 'mega' AND pokemon_id <= $lastFormId
-            GROUP BY base_pokemon_id
+            ORDER BY base_pokemon_id, pokemon_id
             """;
         command.Parameters.AddWithValue("$lastFormId", LastGen6MegaFormId);
         using var reader = command.ExecuteReader();
-        var forms = new Dictionary<int, PokemonInfo>();
+        var forms = new Dictionary<int, List<PokemonInfo>>();
         while (reader.Read())
         {
             int baseId = reader.GetInt32(0);
             PokemonInfo form = pokemon[reader.GetInt32(1)];
             if (pokemon[baseId].SpeciesId != form.SpeciesId || pokemon[baseId].BaseHp != form.BaseHp)
                 throw new InvalidDataException($"메가진화 폼 {form.Id}의 종 또는 HP 종족값이 기본 폼과 다릅니다.");
-            forms.Add(baseId, form);
+            if (!forms.TryGetValue(baseId, out var options))
+                forms.Add(baseId, options = []);
+            options.Add(form);
         }
-        return forms.ToFrozenDictionary();
+        return forms.ToFrozenDictionary(pair => pair.Key, pair => (IReadOnlyList<PokemonInfo>)pair.Value.AsReadOnly());
     }
 
     // 메가진화하려면 그 기술을 알고 있어야 하는 포켓몬 (6세대 ORAS: 레쿠쟈는 화룡점정)
     private static FrozenDictionary<int, int> LoadMegaRequiredMoves(SqliteConnection connection,
-        FrozenDictionary<int, PokemonInfo> megaForms, FrozenDictionary<int, PokemonMoveInfo> moves)
+        FrozenDictionary<int, IReadOnlyList<PokemonInfo>> megaForms, FrozenDictionary<int, PokemonMoveInfo> moves)
     {
         using var command = connection.CreateCommand();
         command.CommandText = """
